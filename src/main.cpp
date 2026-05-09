@@ -1,5 +1,6 @@
 #include "pricing/blackscholes.hpp"
 #include "calibration/ImpliedVol.hpp"
+#include "calibration/SSVI.hpp"
 #include <iostream>
 #include <cmath>
 #include <numbers>
@@ -25,4 +26,16 @@ int main(){
         else if (err == vse::calibration::IVError::NoArbitrageViolation)
             std::cout << "Error: no arbitrage violation" << std::endl;
     }
+
+    vse::calibration::SSVIParams sp{ .rho=-0.3, .eta=0.5, .gamma=0.3, .nu=0.04 };
+    std::cout << "------------------------------------------------------" << std::endl;
+    std::cout << "Is it arbitrage free ? " << vse::calibration::isArbitrageFree(sp) << std::endl;
+    std::cout << "Total variance : " << vse::calibration::totalVariance(0.0, 1.0, sp) << std::endl;
+
+    double iv_left  = vse::calibration::impliedVolSSVI(-0.5, 1.0, sp);
+    double iv_right = vse::calibration::impliedVolSSVI( 0.5, 1.0, sp);
+    std::cout << "IV(k=-0.5) = " << iv_left << ", IV(k=0.5) = " << iv_right
+              << ", diff = " << iv_left - iv_right << std::endl;
+
+    
 }
