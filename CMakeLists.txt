@@ -21,6 +21,8 @@ find_package(NLopt REQUIRED)
 
 add_library(vol_surface_engine
     src/pricing/blackscholes.cpp
+    src/calibration/ImpliedVol.cpp
+    src/calibration/SSVI.cpp
 )
 
 target_include_directories(vol_surface_engine PUBLIC

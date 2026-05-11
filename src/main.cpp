@@ -4,6 +4,8 @@
 #include <iostream>
 #include <cmath>
 #include <numbers>
+#include <vector>
+#include <Eigen/Dense>
 
 int main(){
     vse::pricing::BSParams p = {60, 65, 0.20, 0.08, 0.0, 0.001};
@@ -37,5 +39,43 @@ int main(){
     std::cout << "IV(k=-0.5) = " << iv_left << ", IV(k=0.5) = " << iv_right
               << ", diff = " << iv_left - iv_right << std::endl;
 
-    
+    // ---- Test calibrateSSVI ----
+    std::cout << "\n====== SSVI Calibration Test ======" << std::endl;
+
+    // True params we want to recover
+    vse::calibration::SSVIParams true_params{ .rho=-0.3, .eta=0.5, .gamma=0.3, .nu=0.04 };
+
+    // Build grids
+    std::vector<double> k_vec = { -0.4, -0.2, -0.1, 0.0, 0.1, 0.2, 0.4 };
+    std::vector<double> T_vec = { 0.25, 0.5, 1.0, 2.0 };
+
+    // Generate synthetic market IV matrix (rows=T, cols=k)
+    Eigen::MatrixXd iv_market(T_vec.size(), k_vec.size());
+    for (size_t i = 0; i < T_vec.size(); ++i) {
+        for (size_t j = 0; j < k_vec.size(); ++j) {
+            iv_market(i, j) = vse::calibration::impliedVolSSVI(k_vec[j], T_vec[i], true_params);
+        }
+    }
+
+    std::cout << "Synthetic IV matrix:" << std::endl << iv_market << std::endl;
+
+    // Calibrate
+    auto calib_result = vse::calibration::calibrateSSVI(k_vec, T_vec, iv_market);
+
+    if (std::holds_alternative<vse::calibration::SSVIParams>(calib_result)) {
+        auto cp = std::get<vse::calibration::SSVIParams>(calib_result);
+        std::cout << "Calibration succeeded!" << std::endl;
+        std::cout << "  rho   = " << cp.rho   << " (true: " << true_params.rho   << ")" << std::endl;
+        std::cout << "  eta   = " << cp.eta   << " (true: " << true_params.eta   << ")" << std::endl;
+        std::cout << "  gamma = " << cp.gamma << " (true: " << true_params.gamma << ")" << std::endl;
+        std::cout << "  nu    = " << cp.nu    << " (true: " << true_params.nu    << ")" << std::endl;
+    } else {
+        auto err = std::get<vse::calibration::SSVIError>(calib_result);
+        if (err == vse::calibration::SSVIError::DidNotConverge)
+            std::cout << "Calibration error: did not converge" << std::endl;
+        else if (err == vse::calibration::SSVIError::ArbitrageViolation)
+            std::cout << "Calibration error: arbitrage violation" << std::endl;
+        else
+            std::cout << "Calibration error: invalid input" << std::endl;
+    }
 }
