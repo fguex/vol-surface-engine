@@ -23,6 +23,7 @@ add_library(vol_surface_engine
     src/pricing/blackscholes.cpp
     src/calibration/ImpliedVol.cpp
     src/calibration/SSVI.cpp
+    src/calibration/LocalVol.cpp
 )
 
 target_include_directories(vol_surface_engine PUBLIC

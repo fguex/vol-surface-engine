@@ -1,81 +1,43 @@
 #include "calibration/ImpliedVol.hpp"
 #include <cmath>
 #include <functional>
+#include <numbers>
 
-namespace {
+namespace vse::calibration{
 
-using vse::calibration::IVError;
-using vse::calibration::IVResult;
+double vega(const vse::pricing::BSParams& p) {
+    double D1  = vse::pricing::d1(p);
+    double pdf = std::exp(-0.5 * D1 * D1) / std::sqrt(2.0 * std::numbers::pi);
+    return p.S * std::exp(-p.q * p.T) * std::sqrt(p.T) * pdf;
+}
 
-std::variant<IVResult, IVError> Brent(
+std::variant<vse::calibration::IVResult, vse::calibration::IVError> Newton(
     std::function<double(double)>  f,
-    double                         a,
-    double                         b,
+    std::function<double(double)>  df,
+    double                         sigma_0,
     double                         tol,
     int                            maxIter
 ){
-    double fa = f(a);
-    double fb = f(b);
-
-    if (fa * fb > 0)
-        return IVError::NoArbitrageViolation;
-
-    if (std::abs(fa) < std::abs(fb)) {
-        std::swap(a, b);
-        std::swap(fa, fb);
-    }
-
-    double c     = a;
-    double fc    = fa;
-    double d     = 0.0;
-    double s;
-    double fs;
-    bool   mflag = true;
+    double sigma = sigma_0;
 
     for (int i = 0; i < maxIter; ++i) {
-        if (std::abs(b - a) < tol)
-            return IVResult{b, i};
+        double fs = f(sigma);
 
-        if (fc != fa && fb != fc) {
-            s = (a * fb * fc) / ((fa - fb) * (fa - fc))
-              + (b * fa * fc) / ((fb - fa) * (fb - fc))
-              + (c * fa * fb) / ((fc - fa) * (fc - fb));
-        } else {
-            s = b - fb * (b - a) / (fb - fa);
-        }
+        if (std::abs(fs) < tol)
+            return vse::calibration::IVResult{sigma, i};
 
-        double tmp         = (3.0 * a + b) / 4.0;
-        bool not_in_bracket = !((s > tmp && s < b) || (s < tmp && s > b));
-        bool cond_mflag    =  mflag && (std::abs(s - b) > 0.5 * std::abs(b - c) || std::abs(b - c) < tol);
-        bool cond_no_mflag = !mflag && (std::abs(s - b) > 0.5 * std::abs(c - d) || std::abs(c - d) < tol);
+        double dfs = df(sigma);
 
-        if (not_in_bracket || cond_mflag || cond_no_mflag) {
-            s     = 0.5 * (a + b);
-            mflag = true;
-        } else {
-            mflag = false;
-        }
+        if (std::abs(dfs) < 1e-10)
+            return vse::calibration::IVError::DidNotConverge;
 
-        fs = f(s);
-        d  = c;
-        c  = b;
-        fc = fb;
+        sigma = sigma - fs / dfs;
 
-        if (fa * fs < 0) {
-            b  = s;
-            fb = fs;
-        } else {
-            a  = s;
-            fa = fs;
-        }
-
-        if (std::abs(fa) < std::abs(fb)) {
-            std::swap(a, b);
-            std::swap(fa, fb);
-        }
+        if (sigma <= 0.0)
+            return vse::calibration::IVError::DidNotConverge;
     }
 
-    return IVError::DidNotConverge;
+    return vse::calibration::IVError::DidNotConverge;
 }
 
 } // namespace
@@ -94,17 +56,22 @@ std::variant<IVResult, IVError> impliedVol(
     int                    maxIter
 ){
     auto f = [&](double sigma) {
-    params.sigma = sigma;
-    double model = (type == OptionType::Call) 
-    ? vse::pricing::callPrice(params)
-    : vse::pricing::putPrice(params);
-    return model - marketPrice;
-
+        params.sigma = sigma;
+        double model = (type == OptionType::Call)
+            ? vse::pricing::callPrice(params)
+            : vse::pricing::putPrice(params);
+        return model - marketPrice;
     };
 
-    auto result = Brent(f, sigma_lo, sigma_hi, tol, maxIter);
+    auto df = [&](double sigma) -> double {
+        params.sigma = sigma;
+        double D1  = vse::pricing::d1(params);
+        double pdf = std::exp(-0.5 * D1 * D1) / std::sqrt(2.0 * std::numbers::pi);
+        return params.S * std::exp(-params.q * params.T) * std::sqrt(params.T) * pdf;
+    };
 
-    return result;
+    double sigma_0 = 0.5 * (sigma_lo + sigma_hi);
+    return Newton(f, df, sigma_0, tol, maxIter);
 }
 
 } // namespace vse::calibration

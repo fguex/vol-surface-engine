@@ -1,6 +1,7 @@
 #include "pricing/blackscholes.hpp"
 #include "calibration/ImpliedVol.hpp"
 #include "calibration/SSVI.hpp"
+#include "calibration/LocalVol.hpp"
 #include <iostream>
 #include <cmath>
 #include <numbers>
@@ -8,7 +9,7 @@
 #include <Eigen/Dense>
 
 int main(){
-    vse::pricing::BSParams p = {60, 65, 0.20, 0.08, 0.0, 0.001};
+    vse::pricing::BSParams p = {.S=60, .K=65, .T=0.25, .r=0.08, .q=0.0, .sigma=0.20};
     std::cout << "valeur du call = " << vse::pricing::callPrice(p) << std::endl;
     std::cout << "--------------------------------------------------------------" << std::endl;
     std::cout << " P - C = " << vse::pricing::callPrice(p) - vse::pricing::putPrice(p) << " , Se^(-qT) - Ke^(-rt) = " << p.S*std::exp(-p.q*p.T) - p.K*std::exp(-p.r*p.T) << std::endl;
@@ -16,11 +17,11 @@ int main(){
     // Now testing of Brent and the implied vol
     double price = vse::pricing::callPrice(p);
     std::cout << "Price of the call : " << price << std::endl;
-    auto result = vse::calibration::impliedVol(price, p, vse::calibration::OptionType::Call, 1e-6, 5.0, 1e-8, 100);
+    auto result = vse::calibration::impliedVol(price, p, vse::calibration::OptionType::Call, 0.01, 2.0, 1e-8, 200);
 
     if (std::holds_alternative<vse::calibration::IVResult>(result)) {
         auto iv = std::get<vse::calibration::IVResult>(result);
-        std::cout << "Implied vol = " << iv.sigma << " (expected 0.3), iterations = " << iv.iterations << std::endl;
+        std::cout << "Implied vol = " << iv.sigma << " (expected 0.2), iterations = " << iv.iterations << std::endl;
     } else {
         auto err = std::get<vse::calibration::IVError>(result);
         if (err == vse::calibration::IVError::DidNotConverge)
@@ -37,7 +38,7 @@ int main(){
     double iv_left  = vse::calibration::impliedVolSSVI(-0.5, 1.0, sp);
     double iv_right = vse::calibration::impliedVolSSVI( 0.5, 1.0, sp);
     std::cout << "IV(k=-0.5) = " << iv_left << ", IV(k=0.5) = " << iv_right
-              << ", diff = " << iv_left - iv_right << std::endl;
+          << ", diff = " << iv_left - iv_right << std::endl;
 
     // ---- Test calibrateSSVI ----
     std::cout << "\n====== SSVI Calibration Test ======" << std::endl;
@@ -78,4 +79,16 @@ int main(){
         else
             std::cout << "Calibration error: invalid input" << std::endl;
     }
+
+    // ---- Test Local Vol (Dupire) ----
+    std::cout << "\n====== Local Vol Test ======" << std::endl;
+
+    std::cout << "sigma_loc(0.0, 1.0) = " << vse::calibration::localVol(0.0, 1.0, true_params) << std::endl;
+    std::cout << "sigma_loc(-0.3, 0.5) = " << vse::calibration::localVol(-0.3, 0.5, true_params) << std::endl;
+    std::cout << "sigma_loc(0.3, 0.5) = " << vse::calibration::localVol(0.3, 0.5, true_params) << std::endl;
+
+    std::vector<double> k_lv = { -0.3, -0.1, 0.0, 0.1, 0.3 };
+    std::vector<double> T_lv = { 0.25, 0.5, 1.0, 2.0 };
+    Eigen::MatrixXd lv_grid = vse::calibration::localVolGrid(k_lv, T_lv, true_params);
+    std::cout << "Local vol grid:" << std::endl << lv_grid << std::endl;
 }
