@@ -31,4 +31,21 @@ namespace vse::pricing{
         return p.K*std::exp(-p.r * p.T) * normalCDF(-D2) - p.S * std::exp(-p.q*p.T)*normalCDF(-D1);
 
     }
+
+    double callPriceForward(double F, double K, double T, double df, double sigma) noexcept {
+        double d1 = (std::log(F / K) + 0.5 * sigma * sigma * T) / (sigma * std::sqrt(T));
+        double d2 = d1 - sigma * std::sqrt(T);
+        return df * (F * normalCDF(d1) - K * normalCDF(d2));
+    }
+
+    double putPriceForward(double F, double K, double T, double df, double sigma) noexcept {
+        double d1 = (std::log(F / K) + 0.5 * sigma * sigma * T) / (sigma * std::sqrt(T));
+        double d2 = d1 - sigma * std::sqrt(T);
+        return df * (K * normalCDF(-d2) - F * normalCDF(-d1));
+    }
+
+    double vegaForward(double F, double K, double T, double df, double sigma) noexcept {
+        double d1 = (std::log(F / K) + 0.5 * sigma * sigma * T) / (sigma * std::sqrt(T));
+        return df * F * std::sqrt(T) * normalPDF(d1);
+    }
 }

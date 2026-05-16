@@ -15,7 +15,11 @@ namespace vse::pricing{
     double putPrice(const BSParams& p);
     double d1(const BSParams& p) noexcept;
     double d2(const BSParams& p) noexcept;
-};
 
+    // Forward-based pricing (accepts any forward & discount factor)
+    double callPriceForward(double F, double K, double T, double df, double sigma) noexcept;
+    double putPriceForward(double F, double K, double T, double df, double sigma) noexcept;
+    double vegaForward(double F, double K, double T, double df, double sigma) noexcept;
+};
 
 #endif
