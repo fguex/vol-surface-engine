@@ -2,6 +2,8 @@
 #include "calibration/ImpliedVol.hpp"
 #include "calibration/SSVI.hpp"
 #include "calibration/LocalVol.hpp"
+#include "data/MarketData.hpp"
+#include "data/DivCurve.hpp"
 #include <iostream>
 #include <cmath>
 #include <numbers>
@@ -91,4 +93,51 @@ int main(){
     std::vector<double> T_lv = { 0.25, 0.5, 1.0, 2.0 };
     Eigen::MatrixXd lv_grid = vse::calibration::localVolGrid(k_lv, T_lv, true_params);
     std::cout << "Local vol grid:" << std::endl << lv_grid << std::endl;
+
+    // ---- Test Market Data Ingestion ----
+    std::cout << "\n====== Market Data Ingestion ======" << std::endl;
+
+    auto mkt = vse::data::MarketData::load("../data", "2026-05-16");
+
+    std::cout << "Spot: " << mkt.spot << std::endl;
+    std::cout << "Calls loaded: " << mkt.calls.size() << std::endl;
+    std::cout << "Puts loaded: " << mkt.puts.size() << std::endl;
+    std::cout << "Rate at 0.5y: " << mkt.rates.rate(0.5) << std::endl;
+    std::cout << "Discount at 1y: " << mkt.rates.discount(1.0) << std::endl;
+    std::cout << "Dividends loaded: " << mkt.divs.divs.size() << " future divs" << std::endl;
+
+    // Forward for a few maturities
+    std::cout << "\nForwards:" << std::endl;
+    for (double T : {0.25, 0.5, 1.0}) {
+        double F = vse::data::forwardDiscrete(mkt.spot, T, mkt.rates, mkt.divs);
+        std::cout << "  F(0," << T << ") = " << F << std::endl;
+    }
+
+    // Implied vol on a few calls (treating as European approx)
+    std::cout << "\nSample implied vols (first 5 calls, European approx):" << std::endl;
+    int count = 0;
+    for (const auto& opt : mkt.calls) {
+        if (count >= 5) break;
+        double F = vse::data::forwardDiscrete(mkt.spot, opt.T, mkt.rates, mkt.divs);
+        double df = mkt.rates.discount(opt.T);
+        double mid = opt.mid();
+
+        // Newton inversion on callPriceForward
+        double sigma = 0.3; // initial guess
+        for (int iter = 0; iter < 100; ++iter) {
+            double price = vse::pricing::callPriceForward(F, opt.K, opt.T, df, sigma);
+            double vega = vse::pricing::vegaForward(F, opt.K, opt.T, df, sigma);
+            if (std::abs(vega) < 1e-12) break;
+            double diff = price - mid;
+            if (std::abs(diff) < 1e-8) break;
+            sigma -= diff / vega;
+            if (sigma <= 0.0) { sigma = 0.01; break; }
+        }
+
+        double k = std::log(opt.K / F);
+        std::cout << "  K=" << opt.K << " T=" << opt.T
+                  << " mid=" << mid << " iv=" << sigma
+                  << " k=" << k << std::endl;
+        ++count;
+    }
 }

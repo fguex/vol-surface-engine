@@ -4,6 +4,7 @@
 #include <variant>
 
 namespace vse::calibration{
+
 struct IVResult{double sigma; int iterations;};
 enum class IVError {
     NoArbitrageViolation,

@@ -3,7 +3,7 @@
 #include <functional>
 #include <numbers>
 
-namespace vse::calibration{
+namespace {
 
 double vega(const vse::pricing::BSParams& p) {
     double D1  = vse::pricing::d1(p);

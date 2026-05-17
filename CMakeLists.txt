@@ -24,6 +24,10 @@ add_library(vol_surface_engine
     src/calibration/ImpliedVol.cpp
     src/calibration/SSVI.cpp
     src/calibration/LocalVol.cpp
+    src/data/RateCurve.cpp
+    src/data/DivCurve.cpp
+    src/data/DateUtils.cpp
+    src/data/MarketData.cpp
 )
 
 target_include_directories(vol_surface_engine PUBLIC

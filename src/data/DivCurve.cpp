@@ -50,4 +50,4 @@ double forwardDiscrete(double S, double T, const RateCurve& rates, const DivCurv
     return (S - divs.pvDividends(0, T, rates) ) / rates.discount(T);
 }
 
-} // namespace vse::data
+} 
