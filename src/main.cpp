@@ -2,8 +2,10 @@
 #include "calibration/ImpliedVol.hpp"
 #include "calibration/SSVI.hpp"
 #include "calibration/LocalVol.hpp"
+#include "pde/Tridiag.hpp"
 #include "data/MarketData.hpp"
 #include "data/DivCurve.hpp"
+#include "pde/Grid.hpp"
 #include <iostream>
 #include <cmath>
 #include <numbers>
@@ -140,4 +142,119 @@ int main(){
                   << " k=" << k << std::endl;
         ++count;
     }
+    const double K    = 100.0;
+    const double tol  = 1e-10;
+
+    auto g = vse::pde::make_uniform_grid(K, -1.0, 1.0, 4);
+
+    // Taille
+    assert(static_cast<int>(g.x.size()) == g.N + 1);
+    assert(static_cast<int>(g.S.size()) == g.N + 1);
+    assert(g.N == 4);
+
+    // Bornes
+    assert(std::abs(g.x[0] - (-1.0)) < tol);
+    assert(std::abs(g.x[4] -   1.0)  < tol);
+
+    // Pas uniforme
+    assert(std::abs(g.dx - 0.5) < tol);
+
+    // Cohérence x → S
+    assert(std::abs(g.S[0] - K * std::exp(-1.0)) < tol);
+    assert(std::abs(g.S[4] - K * std::exp( 1.0)) < tol);
+
+    // ATM au nœud central
+    assert(std::abs(g.x[2] - 0.0) < tol);
+    assert(std::abs(g.S[2] - K)   < tol);
+
+    // Uniformité : dx constant
+    for (int j = 1; j <= g.N; ++j)
+        assert(std::abs((g.x[j] - g.x[j-1]) - g.dx) < tol);
+
+    std::cout << "Grid OK\n";
+    std::cout << "  N=" << g.N << "  dx=" << g.dx << "\n";
+    std::cout << "  x[0]=" << g.x[0] << "  x[N]=" << g.x[g.N] << "\n";
+    std::cout << "  S[0]=" << g.S[0] << "  S[N]=" << g.S[g.N] << "\n";
+    std::cout << "  S[2]=" << g.S[2] << "  (should be " << K << ")\n";
+
+    // ── Test 1 : 3x3 system with known solution ───────────────────────────
+    // | 2  -1   0 | | x1 |   | 1 |
+    // |-1   2  -1 | | x2 | = | 0 |
+    // | 0  -1   2 | | x3 |   | 1 |
+    // Exact solution: x1 = x2 = x3 = 1
+    //
+    // Grid convention: N=4 (5 nodes total, j=0..4)
+    // Interior nodes: j=1,2,3 → 3 interior nodes
+    // Boundary nodes j=0 and j=4 are Dirichlet (not touched by Thomas)
+
+    vse::pde::Tridiag A;
+    A.lower.assign(5, 0.0);
+    A.diag .assign(5, 0.0);
+    A.upper.assign(5, 0.0);
+
+    // Fill interior nodes j=1,2,3
+    // j=1
+    A.diag [1] =  2.0;  A.upper[1] = -1.0;
+    // j=2
+    A.lower[2] = -1.0;  A.diag [2] =  2.0;  A.upper[2] = -1.0;
+    // j=3
+    A.lower[3] = -1.0;  A.diag [3] =  2.0;
+
+    // rhs: size N+1=5, interior values at j=1,2,3
+    std::vector<double> rhs(5, 0.0);
+    rhs[1] = 1.0;
+    rhs[2] = 0.0;
+    rhs[3] = 1.0;
+
+    // out: boundary values already set (Dirichlet, not used by Thomas)
+    std::vector<double> out(5, 0.0);
+
+    vse::pde::thomas_solve(A, rhs, out);
+
+    assert(std::abs(out[1] - 1.0) < tol);
+    assert(std::abs(out[2] - 1.0) < tol);
+    assert(std::abs(out[3] - 1.0) < tol);
+
+    std::cout << "Test 1 (3x3 known solution): OK\n";
+    std::cout << "  out[1]=" << out[1]
+              << "  out[2]=" << out[2]
+              << "  out[3]=" << out[3] << "\n";
+
+    // ── Test 2 : residual check A*x - rhs = 0 ────────────────────────────
+    // Reassemble a larger random-ish system and verify A*out = rhs
+    const int N = 6;  // 7 nodes total, 5 interior
+    vse::pde::Tridiag B;
+    B.lower.assign(N + 1, 0.0);
+    B.diag .assign(N + 1, 0.0);
+    B.upper.assign(N + 1, 0.0);
+
+    // Strictly diagonally dominant tridiagonal
+    for (int j = 1; j < N; ++j) {
+        B.lower[j] = -1.0;
+        B.diag [j] =  4.0;
+        B.upper[j] = -1.0;
+    }
+
+    std::vector<double> rhs2(N + 1, 0.0);
+    for (int j = 1; j < N; ++j)
+        rhs2[j] = static_cast<double>(j);  // arbitrary rhs
+
+    std::vector<double> out2(N + 1, 0.0);
+    vse::pde::thomas_solve(B, rhs2, out2);
+
+    // Compute residual r = A*out2 - rhs2 on interior nodes
+    double max_residual = 0.0;
+    for (int j = 1; j < N; ++j) {
+        double Ax = B.lower[j] * out2[j - 1]
+                  + B.diag [j] * out2[j]
+                  + B.upper[j] * out2[j + 1];
+        max_residual = std::max(max_residual, std::abs(Ax - rhs2[j]));
+    }
+
+    assert(max_residual < tol);
+    std::cout << "Test 2 (residual check, N=" << N << "): OK\n";
+    std::cout << "  max residual = " << max_residual << "\n";
+
+    return 0;
+
 }

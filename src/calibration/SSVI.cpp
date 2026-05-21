@@ -38,10 +38,17 @@ namespace vse::calibration {
     }
 
     double dw_dT(double k, double T, const SSVIParams& p) noexcept {
-        // dw/dT = dtheta/dT * dw/dtheta  (chain rule)
-        // For now: finite difference approximation
-        double eps = T * 1e-6;
-        return (totalVariance(k, T + eps, p) - totalVariance(k, T - eps, p)) / (2.0 * eps);
+        double th   = theta(T, p);
+        double ph   = phi(th, p);
+        double disc = std::sqrt(std::pow(ph*k + p.rho, 2) + 1.0 - p.rho*p.rho);
+
+        double dphi_dth = -ph * (p.gamma / th + (1.0 - p.gamma) / (1.0 + th));
+
+        double dw_dth = 0.5 * (1.0 + p.rho*ph*k + disc)
+                      + th * 0.5 * (p.rho*dphi_dth*k
+                          + dphi_dth*k*(ph*k + p.rho)/disc);
+
+        return p.nu * dw_dth;
     }
 
     bool isArbitrageFree(const SSVIParams& p) noexcept {
@@ -64,6 +71,7 @@ namespace vse::calibration {
     {
         auto* d = static_cast<CalibData*>(raw_data);
         SSVIParams params{ x[0], x[1], x[2], x[3] };
+        if (!isArbitrageFree(params)) return 1e6;
         double err = 0.0;
         for (size_t i = 0; i < d->T_grid.size(); ++i) {
             for (size_t j = 0; j < d->k_grid.size(); ++j) {

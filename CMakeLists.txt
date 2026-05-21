@@ -20,14 +20,16 @@ find_package(Eigen3 5.0 REQUIRED NO_MODULE)
 find_package(NLopt REQUIRED)
 
 add_library(vol_surface_engine
-    src/pricing/blackscholes.cpp
-    src/calibration/ImpliedVol.cpp
-    src/calibration/SSVI.cpp
-    src/calibration/LocalVol.cpp
-    src/data/RateCurve.cpp
-    src/data/DivCurve.cpp
-    src/data/DateUtils.cpp
-    src/data/MarketData.cpp
+  src/pricing/blackscholes.cpp
+  src/calibration/ImpliedVol.cpp
+  src/calibration/SSVI.cpp
+  src/calibration/LocalVol.cpp
+  src/data/RateCurve.cpp
+  src/data/DivCurve.cpp
+  src/data/DateUtils.cpp
+  src/data/MarketData.cpp
+    src/pde/Grid.cpp
+    src/pde/Tridiag.cpp
 )
 
 target_include_directories(vol_surface_engine PUBLIC
