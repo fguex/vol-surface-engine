@@ -24,7 +24,8 @@ static std::vector<OptionQuote> loadOptions(const std::string& path, bool isCall
             std::getline(ss, token, ','); double T = std::stod(token);
             std::getline(ss, token, ','); // daysToExpiry (skip)
             std::getline(ss, token, ','); // type (skip)
-            std::getline(ss, token, ','); // exerciseType (skip)
+            std::getline(ss, token, ',');
+            ExerciseType exercise = (token == "American") ? ExerciseType::American : ExerciseType::European;
             std::getline(ss, token, ','); double K = std::stod(token);
             std::getline(ss, token, ','); double bid = std::stod(token);
             std::getline(ss, token, ','); double ask = std::stod(token);
@@ -33,7 +34,7 @@ static std::vector<OptionQuote> loadOptions(const std::string& path, bool isCall
             std::getline(ss, token, ','); int oi = static_cast<int>(std::stod(token));
 
             if (bid > 0.0 && ask > 0.0) {
-                quotes.push_back(OptionQuote{K, T, isCall, bid, ask, volume, oi});
+                quotes.push_back(OptionQuote{.K=K, .T=T, .isCall=isCall, .exercise=exercise, .bid=bid, .ask=ask, .volume=volume, .openInterest=oi});
             }
         } catch (...) {
             continue; // skip malformed lines

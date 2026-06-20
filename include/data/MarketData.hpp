@@ -8,10 +8,13 @@
 
 namespace vse::data {
 
+    enum class ExerciseType { European, American };
+
     struct OptionQuote {
         double K;
         double T;
         bool isCall;
+        ExerciseType exercise;
         double bid;
         double ask;
         int volume;
