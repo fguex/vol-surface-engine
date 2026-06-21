@@ -3,6 +3,7 @@
 #include "calibration/SSVI.hpp"
 #include "calibration/LocalVol.hpp"
 #include "pde/Tridiag.hpp"
+#include "pde/PDEPricer.hpp"
 #include "data/MarketData.hpp"
 #include "data/DivCurve.hpp"
 #include "pde/Grid.hpp"
@@ -99,7 +100,7 @@ int main(){
     // ---- Test Market Data Ingestion ----
     std::cout << "\n====== Market Data Ingestion ======" << std::endl;
 
-    auto mkt = vse::data::MarketData::load("../data", "2026-05-16");
+    auto mkt = vse::data::MarketData::load("data", "2026-05-16");
 
     std::cout << "Spot: " << mkt.spot << std::endl;
     std::cout << "Calls loaded: " << mkt.calls.size() << std::endl;
@@ -254,6 +255,54 @@ int main(){
     assert(max_residual < tol);
     std::cout << "Test 2 (residual check, N=" << N << "): OK\n";
     std::cout << "  max residual = " << max_residual << "\n";
+
+    // ── PDEPricer : vol plate vs BS analytique ────────────────────────────
+    std::cout << "\n── PDEPricer vs BS analytique (vol plate) ──\n";
+    {
+        double S0    = 100.0;
+        double K     = 100.0;
+        double T     = 1.0;
+        double sigma = 0.20;
+        double r     = 0.05;
+        double q     = 0.02;
+
+        // Référence BS analytique
+        vse::pricing::BSParams bs{.S=S0, .K=K, .T=T, .r=r, .q=q, .sigma=sigma};
+        double bs_call = vse::pricing::callPrice(bs);
+        double bs_put  = vse::pricing::putPrice(bs);
+
+        // PDE avec vol plate (européen)
+        vse::pde::PDEParams params;
+        params.N = 400;
+        params.M = 200;
+
+        auto res_call = vse::pde::price(
+            vse::pde::OptionType::Call, vse::pde::ExerciseStyle::European,
+            S0, K, T, sigma, r, q, params);
+
+        auto res_put = vse::pde::price(
+            vse::pde::OptionType::Put, vse::pde::ExerciseStyle::European,
+            S0, K, T, sigma, r, q, params);
+
+        std::cout << "BS  call=" << bs_call  << "  put=" << bs_put  << "\n";
+        std::cout << "PDE call=" << res_call.price << "  put=" << res_put.price << "\n";
+        std::cout << "err call=" << std::abs(res_call.price - bs_call)
+                  << "  err put=" << std::abs(res_put.price - bs_put) << "\n";
+
+        assert(std::abs(res_call.price - bs_call) < 0.01);
+        assert(std::abs(res_put.price  - bs_put)  < 0.01);
+
+        // Américain >= Européen
+        auto res_am_put = vse::pde::price(
+            vse::pde::OptionType::Put, vse::pde::ExerciseStyle::American,
+            S0, K, T, sigma, r, q, params);
+
+        assert(res_am_put.price >= res_put.price - 1e-9);
+        std::cout << "Américain put=" << res_am_put.price
+                  << " >= Européen put=" << res_put.price << " OK\n";
+
+        std::cout << "PDEPricer OK\n";
+    }
 
     return 0;
 

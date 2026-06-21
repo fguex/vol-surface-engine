@@ -30,6 +30,7 @@ add_library(vol_surface_engine
   src/data/MarketData.cpp
     src/pde/Grid.cpp
     src/pde/Tridiag.cpp
+    src/pde/PDEPricer.cpp
 )
 
 target_include_directories(vol_surface_engine PUBLIC

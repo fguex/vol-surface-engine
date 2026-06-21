@@ -25,7 +25,7 @@ struct PDEResult{
 PDEResult price(
     OptionType type,
     ExerciseStyle style,
-    double s0,
+    double S0,
     double K,
     double T,
     std::function<double(double S, double t)> sigma_loc,
@@ -34,5 +34,17 @@ PDEResult price(
     const PDEParams& params = PDEParams{}
 );
 
-};
+PDEResult price(
+    OptionType type,
+    ExerciseStyle style,
+    double S0,
+    double K,
+    double T,
+    double sigma,
+    double r,
+    double q,
+    const PDEParams& params = PDEParams{}
+);
+
+} // namespace vse::pde
 #endif 
