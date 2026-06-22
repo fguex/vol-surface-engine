@@ -29,7 +29,7 @@ DivCurve DivCurve::fromCSV(const std::string& filepath, const std::string& today
 
         double T = yearsBetween(today, date);
         if (T > 0.0) {
-            divs.push_back(Dividend{T, amount});
+            divs.push_back(Dividend{T, amount, 0.0});
         }
     }
 
@@ -40,12 +40,21 @@ double DivCurve::pvDividends(double t, double T, const RateCurve& curve) const n
     double pv = 0;
     for (const auto& d: divs){
         if (d.T > t && d.T <= T){
-            pv += d.amount *curve.discount(d.T);
+            pv += d.alpha * curve.discount(d.T);
         }
     }
     return pv;
 }
 
+std::vector<Dividend> DivCurve::inInterval(double t1, double t2) const noexcept{
+    std::vector<Dividend> result;
+    for ( const auto& d : divs){
+        if (d.T > t1 && d.T <= t2){
+            result.push_back(d);
+        }
+    }
+    return result;
+}
 double forwardDiscrete(double S, double T, const RateCurve& rates, const DivCurve& divs) noexcept {
     return (S - divs.pvDividends(0, T, rates) ) / rates.discount(T);
 }

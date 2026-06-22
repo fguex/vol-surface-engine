@@ -256,6 +256,38 @@ int main(){
     std::cout << "Test 2 (residual check, N=" << N << "): OK\n";
     std::cout << "  max residual = " << max_residual << "\n";
 
+    // ── DivCurve affine ───────────────────────────────────────────────────
+    std::cout << "\n── DivCurve affine ──\n";
+    {
+        vse::data::RateCurve flat({0.0, 5.0}, {0.05, 0.05});
+        vse::data::DivCurve dc;
+        dc.divs = {
+            {0.25, 2.0, 0.0},   // cash pur dans 3 mois
+            {0.75, 1.0, 0.02},  // mixte dans 9 mois
+        };
+
+        // pvDividends somme uniquement les alpha
+        double pv = dc.pvDividends(0.0, 1.0, flat);
+        double expected_pv = 2.0 * flat.discount(0.25) + 1.0 * flat.discount(0.75);
+        std::cout << "PV dividendes = " << pv << "  (attendu " << expected_pv << ")\n";
+        assert(std::abs(pv - expected_pv) < 1e-10);
+
+        // inInterval
+        auto d1 = dc.inInterval(0.0, 0.5);
+        assert(d1.size() == 1 && d1[0].alpha == 2.0 && d1[0].beta == 0.0);
+        std::cout << "inInterval(0, 0.5) : " << d1.size() << " div  OK\n";
+
+        auto d2 = dc.inInterval(0.0, 1.0);
+        assert(d2.size() == 2);
+        std::cout << "inInterval(0, 1.0) : " << d2.size() << " divs OK\n";
+
+        auto d3 = dc.inInterval(0.5, 1.0);
+        assert(d3.size() == 1 && d3[0].alpha == 1.0 && d3[0].beta == 0.02);
+        std::cout << "inInterval(0.5, 1.0) : " << d3.size() << " div  OK\n";
+
+        std::cout << "DivCurve OK\n";
+    }
+
     // ── PDEPricer : vol plate vs BS analytique ────────────────────────────
     std::cout << "\n── PDEPricer vs BS analytique (vol plate) ──\n";
     {

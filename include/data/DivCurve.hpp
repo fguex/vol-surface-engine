@@ -9,7 +9,8 @@ namespace vse::data {
 
 struct Dividend {
     double T;
-    double amount;
+    double alpha;
+    double beta;
 };
 
 struct DivCurve {
@@ -17,6 +18,7 @@ struct DivCurve {
 
     static DivCurve fromCSV(const std::string& filepath, const std::string& today);
     double pvDividends(double t, double T, const RateCurve& curve) const noexcept;
+    std::vector<Dividend> inInterval(double t1, double t2) const noexcept;
 };
 
 double forwardDiscrete(double S, double T, const RateCurve& rates, const DivCurve& divs) noexcept;
