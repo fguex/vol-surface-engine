@@ -31,6 +31,7 @@ add_library(vol_surface_engine
     src/pde/Grid.cpp
     src/pde/Tridiag.cpp
     src/pde/PDEPricer.cpp
+    src/opt/NelderMead.cpp
 )
 
 target_include_directories(vol_surface_engine PUBLIC
