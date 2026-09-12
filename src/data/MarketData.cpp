@@ -5,64 +5,73 @@
 
 namespace vse::data {
 
-static std::vector<OptionQuote> loadOptions(const std::string& path, bool isCall) {
+// Colonnes quotes.csv produites par python/data/export.py :
+// K, T, isCall, exerciseType, bid, ask, volume, openInterest
+static void loadQuotes(const std::string& path,
+                       std::vector<OptionQuote>& calls,
+                       std::vector<OptionQuote>& puts)
+{
     std::ifstream file(path);
     if (!file.is_open())
         throw std::runtime_error("Cannot open: " + path);
 
     std::string line;
-    std::getline(file, line); // skip header
-
-    std::vector<OptionQuote> quotes;
+    std::getline(file, line); // header
 
     while (std::getline(file, line)) {
+        if (line.empty()) continue;
         try {
             std::istringstream ss(line);
             std::string token;
 
-            std::getline(ss, token, ','); // expiration (skip)
-            std::getline(ss, token, ','); double T = std::stod(token);
-            std::getline(ss, token, ','); // daysToExpiry (skip)
-            std::getline(ss, token, ','); // type (skip)
+            std::getline(ss, token, ','); double K            = std::stod(token);
+            std::getline(ss, token, ','); double T            = std::stod(token);
+            std::getline(ss, token, ','); bool   isCall       = (std::stoi(token) == 1);
             std::getline(ss, token, ',');
-            ExerciseType exercise = (token == "American") ? ExerciseType::American : ExerciseType::European;
-            std::getline(ss, token, ','); double K = std::stod(token);
-            std::getline(ss, token, ','); double bid = std::stod(token);
-            std::getline(ss, token, ','); double ask = std::stod(token);
-            std::getline(ss, token, ','); // lastPrice (skip)
-            std::getline(ss, token, ','); int volume = static_cast<int>(std::stod(token));
-            std::getline(ss, token, ','); int oi = static_cast<int>(std::stod(token));
+            ExerciseType exercise = (token == "American") ? ExerciseType::American
+                                                          : ExerciseType::European;
+            std::getline(ss, token, ','); double bid          = std::stod(token);
+            std::getline(ss, token, ','); double ask          = std::stod(token);
+            std::getline(ss, token, ','); int    volume       = std::stoi(token);
+            std::getline(ss, token, ','); int    oi           = std::stoi(token);
 
-            if (bid > 0.0 && ask > 0.0) {
-                quotes.push_back(OptionQuote{.K=K, .T=T, .isCall=isCall, .exercise=exercise, .bid=bid, .ask=ask, .volume=volume, .openInterest=oi});
-            }
+            OptionQuote q{.K=K, .T=T, .isCall=isCall, .exercise=exercise,
+                          .bid=bid, .ask=ask, .volume=volume, .openInterest=oi};
+            (isCall ? calls : puts).push_back(q);
         } catch (...) {
-            continue; // skip malformed lines
+            continue;
         }
     }
-
-    return quotes;
 }
 
-MarketData MarketData::load(const std::string& folder, const std::string& today) {
-    // 1. Spot
-    std::ifstream spotFile(folder + "/aapl_spot.csv");
-    if (!spotFile.is_open())
-        throw std::runtime_error("Cannot open spot file");
-    std::string line;
-    std::getline(spotFile, line); // header
-    std::getline(spotFile, line);
-    double spot = std::stod(line.substr(line.find(',') + 1));
+MarketData MarketData::load(const std::string& folder, const std::string& today)
+{
+    (void)today; // reserve pour filtrage par date si necessaire
 
-    // 2. Rates
-    auto rates = RateCurve::fromCSV(folder + "/treasury_rates.csv");
+    // Spot : optionnel, lit data/csv/spot.txt si present
+    double spot = 0.0;
+    {
+        std::ifstream sf(folder + "/spot.txt");
+        if (sf.is_open()) sf >> spot;
+    }
 
-    // 3. Divs
-    auto divs = DivCurve::fromCSV(folder + "/aapl_dividends.csv", today);
+    // Taux : optionnel — taux plat 0% si rates.csv absent
+    RateCurve rates = [&]() -> RateCurve {
+        std::ifstream rf(folder + "/rates.csv");
+        if (rf.is_open()) return RateCurve::fromCSV(folder + "/rates.csv");
+        return RateCurve{{0.0, 30.0}, {0.0, 0.0}}; // flat 0%
+    }();
 
-    // 4. Options
-    auto calls = loadOptions(folder + "/aapl_calls.csv", true);
-    auto puts = loadOptions(folder + "/aapl_puts.csv", false);
+    // Dividendes : optionnel — aucun dividende si divs.csv absent
+    DivCurve divs = [&]() -> DivCurve {
+        std::ifstream df(folder + "/divs.csv");
+        if (df.is_open()) return DivCurve::fromCSV(folder + "/divs.csv", today);
+        return DivCurve{};
+    }();
+
+    // Options
+    std::vector<OptionQuote> calls, puts;
+    loadQuotes(folder + "/quotes.csv", calls, puts);
 
     return MarketData{spot, std::move(rates), std::move(divs),
                       std::move(calls), std::move(puts)};

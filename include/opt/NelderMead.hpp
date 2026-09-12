@@ -1,7 +1,7 @@
 #ifndef NELDERMEAD_HPP
 #define NELDERMEAD_HPP
 #include <vector>
-
+#include <functional>
 
 namespace vse::opt{
 
@@ -9,10 +9,13 @@ namespace vse::opt{
 
 
 struct NMParams{
-    double alpha;
-    double gamma;
-    double beta;
-    double delta;
+    double alpha   = 1.0;
+    double gamma   = 2.0;
+    double beta    = 0.5;
+    double delta   = 0.5;
+    double tol_x   = 1e-6;
+    double tol_f   = 1e-6;
+    int    max_iter = 1000;
 };
 
 struct Vertex{

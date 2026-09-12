@@ -1,0 +1,36 @@
+services:
+  db:
+    image: timescale/timescaledb:latest-pg16   # a epingler une fois que ca tourne
+    environment:
+      POSTGRES_USER: vse
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?definis POSTGRES_PASSWORD dans .env}
+      POSTGRES_DB: volsurface
+    ports:
+      - "5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./sql:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U vse -d volsurface"]
+      interval: 5s
+      timeout: 5s
+      retries: 12
+
+  ingest:
+    build: .
+    depends_on:
+      db:
+        condition: service_healthy
+    environment:
+      PGHOST: db
+      PGUSER: vse
+      PGPASSWORD: ${POSTGRES_PASSWORD}
+      PGDATABASE: volsurface
+      DATA_DIR: /app/data
+    volumes:
+      - ./data:/app/data
+      - ./python:/app/python  # hot-reload en dev : pas de rebuild apres chaque modif
+    command: ["python", "-m", "python.jobs.ingest"]
+
+volumes:
+  pgdata:

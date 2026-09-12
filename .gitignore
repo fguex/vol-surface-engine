@@ -58,6 +58,9 @@ compile_commands.json
 *.bak
 *.swp
 
+# Secrets
+.env
+
 # vcpkg
 vcpkg_installed/
 
@@ -67,3 +70,16 @@ vcpkg_installed/
 # test output & cache
 Testing/
 .cache/
+.env
+
+# donnees de marche : sorties du pipeline, regenerables par un run d'ingestion
+data/raw/
+data/csv/
+
+# macOS
+.DS_Store
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/

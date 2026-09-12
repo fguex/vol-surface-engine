@@ -8,12 +8,17 @@
 #include "data/DivCurve.hpp"
 #include "pde/Grid.hpp"
 #include <iostream>
+#include <cassert>
 #include <cmath>
 #include <numbers>
 #include <vector>
+#include <map>
+#include <algorithm>
 #include <Eigen/Dense>
 
-int main(){
+int main_old(){
+
+    // comment the following
     vse::pricing::BSParams p = {.S=60, .K=65, .T=0.25, .r=0.08, .q=0.0, .sigma=0.20};
     std::cout << "valeur du call = " << vse::pricing::callPrice(p) << std::endl;
     std::cout << "--------------------------------------------------------------" << std::endl;
@@ -338,4 +343,148 @@ int main(){
 
     return 0;
 
+}
+
+int main(){
+
+// --- test SSVI calibration sur données SPX réelles ---
+{
+    auto md = vse::data::MarketData::load("data/csv/SPX", "2026-09-12");
+    const double S0 = md.spot > 0 ? md.spot : 7656.98;
+    const double r  = 0.0;   // taux plat en attendant rates.csv
+    const double q  = 0.0;   // pas de dividende sur l'indice
+
+    std::cout << "SPX : " << md.calls.size() << " calls, "
+              << md.puts.size() << " puts, spot=" << S0 << "\n";
+
+    // 1. Calcul de vol implicite pour chaque cotation
+    struct IVPoint { double k; double T; double iv; };
+    std::vector<IVPoint> pts;
+
+    auto add_iv = [&](const vse::data::OptionQuote& quote, bool isCall) {
+        double mid = quote.mid();
+        if (mid <= 0.0) return;
+        double F  = S0 * std::exp((r - q) * quote.T);
+        double lk = std::log(quote.K / F);
+        if (std::abs(lk) > 0.5) return;   // garder autour de l'ATM
+
+        vse::pricing::BSParams bp{S0, quote.K, quote.T, r, q, 0.2};
+        auto type = isCall ? vse::calibration::OptionType::Call
+                           : vse::calibration::OptionType::Put;
+        auto res = vse::calibration::impliedVol(mid, bp, type, 1e-4, 5.0, 1e-7, 200);
+        if (std::holds_alternative<vse::calibration::IVResult>(res))
+            pts.push_back({lk, quote.T, std::get<vse::calibration::IVResult>(res).sigma});
+    };
+
+    for (auto& q2 : md.calls) add_iv(q2, true);
+    for (auto& q2 : md.puts)  add_iv(q2, false);
+
+    std::cout << "IVs valides : " << pts.size() << "\n";
+    if (pts.empty()) { std::cout << "Aucune IV — arrêt\n"; return 1; }
+
+    // 2. Grouper par maturité, garder les tranches avec ≥ 8 points
+    std::map<double, std::vector<std::pair<double,double>>> by_T;
+    for (auto& p : pts) by_T[p.T].emplace_back(p.k, p.iv);
+
+    std::vector<double> T_grid;
+    std::vector<std::vector<std::pair<double,double>>> slices;
+    for (auto& [T, kvec] : by_T) {
+        if (kvec.size() >= 8) {
+            std::sort(kvec.begin(), kvec.end());
+            T_grid.push_back(T);
+            slices.push_back(kvec);
+        }
+    }
+    std::cout << "Maturités retenues : " << T_grid.size() << "\n";
+
+    // 3. Diagnostic : plage k par tranche
+    std::cout << "\nT        k_min    k_max    npts\n";
+    for (int i = 0; i < static_cast<int>(T_grid.size()); ++i) {
+        std::cout << T_grid[i] << "  "
+                  << slices[i].front().first << "  "
+                  << slices[i].back().first  << "  "
+                  << slices[i].size() << "\n";
+    }
+
+    // Garder seulement les tranches bi-latérales (calls ET puts : k_min < -0.05 ET k_max > 0.05)
+    // et avec T >= 0.08 (exclure les weeklies trop courts sans smile exploitable)
+    {
+        std::vector<double> T2;
+        std::vector<std::vector<std::pair<double,double>>> s2;
+        for (int i = 0; i < static_cast<int>(T_grid.size()); ++i) {
+            if (T_grid[i] < 0.08) continue;
+            if (slices[i].front().first > -0.05) continue;  // pas assez de puts
+            if (slices[i].back().first  <  0.05) continue;  // pas assez de calls
+            T2.push_back(T_grid[i]);
+            s2.push_back(slices[i]);
+        }
+        T_grid = T2;  slices = s2;
+    }
+    std::cout << "Tranches bi-latérales (T>=0.08, k_min<-0.05, k_max>0.05) : " << T_grid.size() << "\n";
+    if (T_grid.empty()) { std::cout << "Aucune tranche bi-latérale — arrêt\n"; return 1; }
+
+    // Plage k commune sur ces tranches filtrées
+    double k_lo = -1.0, k_hi = 1.0;
+    for (int i = 0; i < static_cast<int>(T_grid.size()); ++i) {
+        k_lo = std::max(k_lo, slices[i].front().first);
+        k_hi = std::min(k_hi, slices[i].back().first);
+    }
+    std::cout << "Plage k commune : [" << k_lo << ", " << k_hi << "]\n";
+    if (k_lo >= k_hi) { std::cout << "Intersection vide — arrêt\n"; return 1; }
+
+    const int NK = 11;
+    std::vector<double> k_grid(NK);
+    for (int j = 0; j < NK; ++j)
+        k_grid[j] = k_lo + j * (k_hi - k_lo) / (NK - 1);
+
+    auto interp = [](const std::vector<std::pair<double,double>>& pts,
+                     double k) -> double {
+        if (k < pts.front().first || k > pts.back().first) return -1.0;
+        auto it = std::lower_bound(pts.begin(), pts.end(),
+                                   std::make_pair(k, -1e9));
+        if (it == pts.begin()) return it->second;
+        auto hi = it; auto lo = std::prev(it);
+        double t = (k - lo->first) / (hi->first - lo->first);
+        return lo->second + t * (hi->second - lo->second);
+    };
+
+    int NT = static_cast<int>(T_grid.size());
+    Eigen::MatrixXd iv_mat(NT, NK);
+    std::vector<int> ok_rows;
+    for (int i = 0; i < NT; ++i) {
+        bool row_ok = true;
+        for (int j = 0; j < NK; ++j) {
+            double v = interp(slices[i], k_grid[j]);
+            if (v < 0) { row_ok = false; break; }
+            iv_mat(i, j) = v;
+        }
+        if (row_ok) ok_rows.push_back(i);
+    }
+
+    // Garder seulement les tranches complètes
+    std::vector<double> T_ok;
+    Eigen::MatrixXd iv_ok(static_cast<int>(ok_rows.size()), NK);
+    for (int ri = 0; ri < static_cast<int>(ok_rows.size()); ++ri) {
+        T_ok.push_back(T_grid[ok_rows[ri]]);
+        iv_ok.row(ri) = iv_mat.row(ok_rows[ri]);
+    }
+    std::cout << "Tranches complètes pour calibration : " << T_ok.size() << "\n";
+    if (T_ok.empty()) { std::cout << "Grille vide — arrêt\n"; return 1; }
+
+    // 4. Calibration SSVI
+    auto result = vse::calibration::calibrateSSVI(k_grid, T_ok, iv_ok);
+
+    if (std::holds_alternative<vse::calibration::SSVIParams>(result)) {
+        auto p = std::get<vse::calibration::SSVIParams>(result);
+        std::cout << "\n=== SSVI calibré ===\n"
+                  << "  rho   = " << p.rho   << "\n"
+                  << "  eta   = " << p.eta   << "\n"
+                  << "  gamma = " << p.gamma << "\n"
+                  << "  nu    = " << p.nu    << "\n"
+                  << "  arbitrage-free : " << (vse::calibration::isArbitrageFree(p) ? "oui" : "NON") << "\n";
+    } else {
+        std::cout << "Calibration échouée\n";
+    }
+}
+    return 0;
 }
