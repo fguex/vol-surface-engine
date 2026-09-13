@@ -1,3 +1,4 @@
+#include <algorithm>
 #include <cmath>
 #include <limits>
 #include "calibration/SSVI.hpp"
@@ -122,6 +123,23 @@ namespace vse::calibration {
     }
 
 
+    // Largest eta allowed by Thm 4.2 (both conditions, global form).
+    // Either condition can bind depending on (gamma, rho), hence the min.
+    static double etaMax(double gamma, double rho) noexcept {
+        const double ar = 1.0 + std::abs(rho);
+        return std::min(4.0 / ar, 2.0 / std::sqrt(phiSqSupFactor(gamma) * ar));
+    }
+
+    // The optimiser works on x = {rho, u, gamma, nu} with eta = u * etaMax(gamma, rho).
+    // Thm 4.2 then reduces to u <= 1, a box bound BOBYQA enforces natively
+    // (it rejects nonlinear constraints). The margin keeps the optimum off the
+    // exact boundary, so rounding in any later round trip cannot flip the verdict.
+    constexpr double kEtaMargin = 1e-4;
+
+    static SSVIParams fromOptimiserVars(const std::vector<double>& x) noexcept {
+        return SSVIParams{ x[0], x[1] * etaMax(x[2], x[0]), x[2], x[3] };
+    }
+
     struct CalibData {
         std::span<const double> k_grid;
         std::span<const double> T_grid;
@@ -133,8 +151,7 @@ namespace vse::calibration {
                             void* raw_data)
     {
         auto* d = static_cast<CalibData*>(raw_data);
-        SSVIParams params{ x[0], x[1], x[2], x[3] };
-        if (!isArbitrageFree(params)) return 1e6;
+        const SSVIParams params = fromOptimiserVars(x);
         double err = 0.0;
         for (size_t i = 0; i < d->T_grid.size(); ++i) {
             for (size_t j = 0; j < d->k_grid.size(); ++j) {
@@ -165,9 +182,9 @@ namespace vse::calibration {
         // Create the NLopt optimiser
         nlopt::opt opt(nlopt::LN_BOBYQA, 4); // 4 parameters, no gradient
 
-        // Bounds
-        opt.set_lower_bounds({ -0.99, 0.01, 0.01, 0.001 });
-        opt.set_upper_bounds({  0.99, 5.0,  0.5,  1.0   });
+        // Bounds on {rho, u, gamma, nu}
+        opt.set_lower_bounds({ -0.99, 0.01,             0.01, 0.001 });
+        opt.set_upper_bounds({  0.99, 1.0 - kEtaMargin, 0.5,  1.0   });
 
         // Objective
         opt.set_min_objective(objective, &data);
@@ -176,8 +193,8 @@ namespace vse::calibration {
         opt.set_xtol_rel(1e-8);
         opt.set_maxeval(10000);
 
-        // Starting point
-        std::vector<double> x = { -0.5, 1.0, 0.3, 0.04 };
+        // Starting point: rho=-0.5, eta=1.0, gamma=0.3, nu=0.04
+        std::vector<double> x = { -0.5, 1.0 / etaMax(0.3, -0.5), 0.3, 0.04 };
 
         // Optimise
         try {
@@ -187,8 +204,8 @@ namespace vse::calibration {
             return SSVIError::DidNotConverge;
         }
 
-        // Check arbitrage
-        SSVIParams params{ x[0], x[1], x[2], x[3] };
+        // Certification: never fails by construction, kept as a final check
+        const SSVIParams params = fromOptimiserVars(x);
         if (!isArbitrageFree(params)) {
             return SSVIError::ArbitrageViolation;
         }

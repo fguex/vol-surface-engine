@@ -8,6 +8,8 @@
 #include "data/DivCurve.hpp"
 #include "pde/Grid.hpp"
 #include <iostream>
+#include <iomanip>
+#include <limits>
 #include <cassert>
 #include <cmath>
 #include <numbers>
@@ -476,12 +478,15 @@ int main(){
 
     if (std::holds_alternative<vse::calibration::SSVIParams>(result)) {
         auto p = std::get<vse::calibration::SSVIParams>(result);
+        // 17 significant digits: the printed text parses back to the exact same double.
+        const auto old_prec = std::cout.precision(std::numeric_limits<double>::max_digits10);
         std::cout << "\n=== SSVI calibré ===\n"
                   << "  rho   = " << p.rho   << "\n"
                   << "  eta   = " << p.eta   << "\n"
                   << "  gamma = " << p.gamma << "\n"
                   << "  nu    = " << p.nu    << "\n"
                   << "  arbitrage-free : " << (vse::calibration::isArbitrageFree(p) ? "oui" : "NON") << "\n";
+        std::cout.precision(old_prec);
     } else {
         std::cout << "Calibration échouée\n";
     }
