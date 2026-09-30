@@ -83,3 +83,6 @@ data/csv/
 __pycache__/
 *.py[cod]
 .venv/
+
+# Notes personnelles
+notes/improvements.md

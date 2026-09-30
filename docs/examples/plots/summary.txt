@@ -1,0 +1,14 @@
+artifact=docs/examples/ssvi_spx_diag.json
+underlying_folder=data/csv/SPX
+date=2026-09-12
+spot=7656.98
+rho=-0.558806
+eta=2.02642
+gamma=0.418737
+nu=0.0243634
+rmse_total=0.0298888
+max_abs_error=0.0905981
+eta_ratio=0.9999
+smile_overlays=docs/examples/plots/smile_overlays.png
+residual_heatmap=docs/examples/plots/residual_heatmap.png
+rmse_by_maturity=docs/examples/plots/rmse_by_maturity.png
