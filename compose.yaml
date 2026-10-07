@@ -1,12 +1,15 @@
 services:
   db:
-    image: timescale/timescaledb:latest-pg16   # a epingler une fois que ca tourne
+    # Version epinglee : une montee de version silencieuse peut rendre le volume illisible.
+    image: timescale/timescaledb:2.30.0-pg16
+    restart: unless-stopped
     environment:
       POSTGRES_USER: vse
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?definis POSTGRES_PASSWORD dans .env}
       POSTGRES_DB: volsurface
     ports:
-      - "5432:5432"
+      # Loopback uniquement. Acces distant : ssh -L 5432:localhost:5432 <user>@<macmini>.local
+      - "127.0.0.1:5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
       - ./sql:/docker-entrypoint-initdb.d:ro

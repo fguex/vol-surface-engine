@@ -594,3 +594,7 @@ Only after that should you decide whether the next change is:
 - a different objective weighting
 - better market-data filtering
 - or, only later, an optimizer comparison.
+
+## Next
+
+Continue with docs/phase1_completion_workbook.md (robust IV, implied forward, runner, tests, solutions).
