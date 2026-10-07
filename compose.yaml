@@ -20,6 +20,9 @@ services:
       retries: 12
 
   ingest:
+    # Ancien job CBOE (licence : pas d'archivage automatique). Ne demarre
+    # qu'explicitement : docker compose --profile cboe run --rm ingest
+    profiles: ["cboe"]
     build: .
     depends_on:
       db:
@@ -34,6 +37,32 @@ services:
       - ./data:/app/data
       - ./python:/app/python  # hot-reload en dev : pas de rebuild apres chaque modif
     command: ["python", "-m", "python.jobs.ingest"]
+
+  collector:
+    # Collecte tick Deribit BTC+ETH -> bronze zstd. Pas de dependance a la DB :
+    # le bronze est sur disque, la DB peut etre en panne sans perte de donnees.
+    build: .
+    restart: unless-stopped
+    environment:
+      DATA_DIR: /app/data
+    volumes:
+      - ./data:/app/data
+    command: ["python", "-m", "python.collect.deribit_ws",
+              "--duration", "0", "--rotate", "3600", "--out", "/app/data/deribit"]
+    stop_grace_period: 30s        # laisse l'ecrivain fermer le fichier .part proprement
+    healthcheck:
+      # unhealthy si aucun message depuis 120 s
+      test: ["CMD", "python", "-c",
+             "import json,time,sys; h=json.load(open('/app/data/deribit/health.json')); sys.exit(0 if time.time()-h['last_msg_at']<120 else 1)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 60s
+    logging:
+      driver: local
+      options:
+        max-size: "20m"
+        max-file: "5"
 
 volumes:
   pgdata:

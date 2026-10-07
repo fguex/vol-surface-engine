@@ -19,6 +19,7 @@ import json
 import logging
 import os
 import random
+import signal
 import time
 import urllib.request
 from dataclasses import dataclass, field
@@ -225,15 +226,62 @@ class Collector:
             self.event("chaos_close")
             await self._ws.close()
 
+    async def instrument_refresh(self, every_s: int = 900) -> None:
+        """Echeances qui expirent (08:00 UTC) / nouvelles listees : si la liste
+        change, on ferme la session -> reconnexion avec la nouvelle liste.
+        Cout : ~2 s de trou, trace dans events.jsonl."""
+        while not self.stop.is_set():
+            await asyncio.sleep(every_s)
+            try:
+                fresh = await asyncio.to_thread(
+                    lambda: [i for c in CURRENCIES for i in list_option_instruments(c)])
+            except OSError as exc:
+                log.warning("instrument refresh failed: %s", exc)
+                continue
+            if set(fresh) != set(self.instruments) and self._ws is not None:
+                added = sorted(set(fresh) - set(self.instruments))
+                removed = sorted(set(self.instruments) - set(fresh))
+                self.event("instrument_refresh", added=len(added), removed=len(removed),
+                           sample_added=added[:5], sample_removed=removed[:5])
+                await self._ws.close()
+
+    async def health(self, every_s: int = 15) -> None:
+        """Ecrit health.json : lu par le healthcheck Docker et le monitoring."""
+        path = self.out / "health.json"
+        last_msgs, last_change = -1, time.time()
+        while not self.stop.is_set():
+            if self.stats.msgs != last_msgs:
+                last_msgs, last_change = self.stats.msgs, time.time()
+            tmp = path.with_suffix(".tmp")
+            tmp.write_text(json.dumps({
+                "updated_at": time.time(), "last_msg_at": last_change,
+                "msgs": self.stats.msgs, "dropped": self.stats.dropped,
+                "reconnects": self.stats.reconnects, "queue": self.queue.qsize(),
+                "n_instruments": len(self.instruments)}))
+            os.replace(tmp, path)
+            await asyncio.sleep(every_s)
+
     async def run(self, duration: float) -> Stats:
+        """duration <= 0 : tourne jusqu'a SIGTERM/SIGINT (mode service)."""
         self.out.mkdir(parents=True, exist_ok=True)
+        loop = asyncio.get_running_loop()
+        for sig in (signal.SIGTERM, signal.SIGINT):
+            loop.add_signal_handler(sig, self.stop.set)
         self.event("start", duration=duration)
         tasks = [asyncio.create_task(self.reader()),
                  asyncio.create_task(self.writer_loop()),
-                 asyncio.create_task(self.reporter())]
+                 asyncio.create_task(self.reporter()),
+                 asyncio.create_task(self.instrument_refresh()),
+                 asyncio.create_task(self.health())]
         if self.chaos_at:
             tasks.append(asyncio.create_task(self.chaos()))
-        await asyncio.sleep(duration)
+        if duration > 0:
+            try:
+                await asyncio.wait_for(self.stop.wait(), timeout=duration)
+            except asyncio.TimeoutError:
+                pass
+        else:
+            await self.stop.wait()
         self.stop.set()
         if self._ws is not None:
             await self._ws.close()
@@ -248,7 +296,7 @@ class Collector:
 
 def main() -> None:
     p = argparse.ArgumentParser()
-    p.add_argument("--duration", type=float, default=600)
+    p.add_argument("--duration", type=float, default=600, help="secondes ; 0 = service, tourne jusqu'a SIGTERM")
     p.add_argument("--rotate", type=int, default=3600, help="secondes par fichier bronze")
     p.add_argument("--out", type=Path, default=Path(os.environ.get("DATA_DIR", "data")) / "deribit")
     p.add_argument("--chaos-at", type=float, default=None, help="couper la connexion apres N s")
