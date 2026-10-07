@@ -75,6 +75,7 @@ Testing/
 # donnees de marche : sorties du pipeline, regenerables par un run d'ingestion
 data/raw/
 data/csv/
+data/deribit*/
 
 # macOS
 .DS_Store

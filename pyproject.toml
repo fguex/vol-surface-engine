@@ -11,6 +11,8 @@ dependencies = [
     "polars>=1.44.2",
     "psycopg[binary]>=3.3.5",
     "pyarrow>=25.0.1",
+    "websockets>=17.1",
+    "zstandard>=0.25.0",
 ]
 [build-system]
 requires = ["hatchling"]

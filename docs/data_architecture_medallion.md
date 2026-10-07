@@ -129,7 +129,28 @@ Règle d'or : un `calibration_run` est reproductible si et seulement si
 
 ---
 
-## 4. Ordre d'implémentation
+## 4. Source retenue : Deribit BTC + ETH, en ticks (mesuré le 7 oct. 2026, ~21h CEST)
+
+Flux WebSocket public wss://www.deribit.com/ws/api/v2, 1 764 options BTC+ETH :
+- `ticker.{instr}.100ms` (greeks, mark_iv, OI…) : 1 357 msg/s, ~1 MB/s → ~90 GB/jour brut. Trop lourd, et redondant.
+- `quote.{instr}` (meilleur bid/ask + tailles uniquement) : 157 msg/s, ~40 KB/s → ~3,5 GB/jour brut JSON,
+  ~0,3–0,5 GB/jour compressé zstd (estimation, à mesurer).
+- Trades : 0 reçu sur les fenêtres de test (marché calme ou nom de canal à vérifier).
+
+Choix :
+- Bronze tick = `quote.*` + `trades.option.*` + index/futures, écrits en append (JSONL zstd, rotation horaire).
+- `ticker.*` uniquement via un snapshot REST toutes les 1 min (mark_iv/greeks de référence pour valider notre IV).
+- Silver = barres 1 s ou 1 min (dernier bid/ask connu, as-of) + table d'événements trades.
+- Gold/fit = sur barres, avec warm start ; le tick sert aux études de microstructure et au replay.
+
+Challenges techniques à traiter :
+- reconnexion + resubscribe, détection de trous (heartbeat `public/set_heartbeat`)
+- horodatage : timestamp exchange vs réception, dérive d'horloge
+- instruments qui apparaissent / expirent (re-scan quotidien après 08:00 UTC)
+- backpressure : le writer ne doit jamais bloquer la lecture WebSocket
+- as-of join : reconstituer l'état du carnet à un instant t pour le fit
+
+## 5. Ordre d'implémentation
 
 1. Trancher la question de la source / licence (section 0).
 2. `bronze_snapshot` + writer bronze (payload brut + hash + source_ts).
