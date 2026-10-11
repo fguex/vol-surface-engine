@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  Demarre Colima (donc le moteur Docker) au boot SANS session graphique.
+
+  Pourquoi ce fichier : `brew services start colima` installe un LaunchAgent,
+  qui ne se lance que dans une session graphique ouverte. Sur un Mac mini
+  headless (personne connecte au clavier), le service ne demarre jamais tout
+  seul : apres un reboot, la DB et le collecteur ne reviennent pas.
+
+  Installation (une fois, mot de passe admin requis) :
+    sudo cp ops/launchd/com.local.colima.plist /Library/LaunchDaemons/
+    sudo chown root:wheel /Library/LaunchDaemons/com.local.colima.plist
+    sudo chmod 644 /Library/LaunchDaemons/com.local.colima.plist
+    sudo launchctl bootstrap system /Library/LaunchDaemons/com.local.colima.plist
+    sudo launchctl kickstart -k system/com.local.colima     # test immediat
+
+  Verification : sudo launchctl print system/com.local.colima | head -20
+                docker context use colima && docker ps
+
+  Alternative (plus simple mais interactive) : activer l'ouverture de session
+  automatique pour l'utilisateur macmini-ai (Reglages > Utilisateurs et
+  groupes). Les LaunchAgents, dont `brew services start colima`, demarrent
+  alors normalement au boot.
+-->
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.local.colima</string>
+
+  <!-- su -l : colima doit tourner en tant qu'utilisateur macmini-ai (etat dans
+       ~/.colima et ~/.lima), pas en root. -->
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/bin/su</string>
+    <string>-l</string>
+    <string>macmini-ai</string>
+    <string>-c</string>
+    <string>/opt/homebrew/bin/colima start</string>
+  </array>
+
+  <key>RunAtLoad</key>
+  <true/>
+  <!-- Pas de KeepAlive : docker/colima gerent leur propre cycle de vie, et un
+       KeepAlive sur un demarrage long relance le VM en boucle. -->
+  <key>KeepAlive</key>
+  <false/>
+  <key>ProcessType</key>
+  <string>Background</string>
+
+  <key>StandardOutPath</key>
+  <string>/tmp/colima-boot.out.log</string>
+  <key>StandardErrorPath</key>
+  <string>/tmp/colima-boot.err.log</string>
+</dict>
+</plist>

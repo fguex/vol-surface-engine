@@ -16,6 +16,39 @@ sur le Mac mini, le scheduler, le monitoring, les backups, et une stratégie de 
 
 ---
 
+## État d'exécution (11 oct. 2026)
+
+Vérifié sur la machine, pas déduit :
+
+- **Mac mini** : `macmini-ai@macmini-ai.local`, macOS 14.0 arm64, FileVault OFF, sleep 0 / autorestart 1.
+  Colima 4 CPU / 6 Go / 60 Go, Docker + compose + buildx installés, `uv 0.13` via l'installeur officiel.
+- **Repo** : `~/vol-surface-engine` (clone du dépôt public), `.env` généré avec un mot de passe aléatoire (chmod 600).
+- **Collecteur Deribit** : `healthy`, 1 726 instruments, ~140 msg/s, zéro drop, `subscribed: true` dans `health.json`.
+- **TimescaleDB 2.30.0-pg16** : 6 tables, hypertables `quote_curated` et `quote_fit`, `127.0.0.1:5432`.
+  Premier run d'ingestion manuel (Phase 2) : SPX, 29 288 lignes brutes, 11 022 cotations retenues, 55 échéances, base 17 Mo.
+- **Persistance** (critère de sortie Phase 1) : après `docker compose restart db`, les 29 288 lignes sont toujours là.
+- **Accès distant** : tunnel `ssh -L 15432:127.0.0.1:5432` depuis le MacBook → requête SQL OK (PostgreSQL 16.15 / Timescale 2.30.0).
+- **Disque** : 86 Go libres (le stack occupe ~23 Go : VM Colima 9,9 Go + images Docker 8 Go).
+
+### Trois pièges rencontrés (et ce qu'on en a fait)
+
+1. **`git` Homebrew cassé sur macOS 14** : le binaire 2.56.0 est compilé pour un macOS plus récent
+   (`Symbol not found: _curl_global_trace`), donc `brew update` et tout clone HTTPS échouent — le
+   bootstrap mourait à l'étape 1. Le script détecte maintenant un git qui ne fait pas d'HTTPS et
+   retombe sur `/usr/bin/git`.
+2. **Aucune session graphique sur le mini** (utilisateur console = `root`) : `brew services start colima`
+   n'enregistre rien d'utile et Colima **ne redémarre pas au boot**. C'est le seul vrai trou restant
+   dans « ça survit tout seul ». Deux solutions : ouverture de session automatique (Réglages >
+   Utilisateurs) ou LaunchDaemon système (`ops/launchd/com.local.colima.plist`, mot de passe admin requis).
+3. **Collecteur capable de mourir en silence** : après le roulement d'échéances de 08:00 UTC, la session
+   s'est reconnectée mais les abonnements sont restés muets pendant 53 h, alors que le heartbeat
+   continuait d'arriver — donc ni la boucle de lecture ni le healthcheck « dernière trame reçue » ne
+   voyaient le problème. Correctif : horodatage de la dernière **donnée** (le heartbeat ne compte pas),
+   watchdog de silence, `open_timeout` sur la connexion, gestion d'exception large dans le lecteur.
+   `health.json` expose maintenant `last_data_at`, `idle_s`, `subscribed`, `stale_events`.
+
+---
+
 ## Phase 0 — Préparer le Mac mini (une fois)
 
 Objectif : une machine qui ne dort pas, accessible en SSH, avec Docker qui démarre tout seul.
