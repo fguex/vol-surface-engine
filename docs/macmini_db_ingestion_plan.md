@@ -38,10 +38,13 @@ Vérifié sur la machine, pas déduit :
    (`Symbol not found: _curl_global_trace`), donc `brew update` et tout clone HTTPS échouent — le
    bootstrap mourait à l'étape 1. Le script détecte maintenant un git qui ne fait pas d'HTTPS et
    retombe sur `/usr/bin/git`.
-2. **Aucune session graphique sur le mini** (utilisateur console = `root`) : `brew services start colima`
-   n'enregistre rien d'utile et Colima **ne redémarre pas au boot**. C'est le seul vrai trou restant
-   dans « ça survit tout seul ». Deux solutions : ouverture de session automatique (Réglages >
-   Utilisateurs) ou LaunchDaemon système (`ops/launchd/com.local.colima.plist`, mot de passe admin requis).
+2. **Aucune session graphique sur le mini** : `brew services start colima` n'enregistre rien
+   d'utile (et échoue depuis SSH avec `launchctl enable gui/<uid>/...` → 125), donc Colima
+   **ne redémarre pas au boot**. Ce trou est maintenant **fermé sans sudo** par un
+   garde-fou cron (`ops/mini-stack-guard.sh`, installé par le bootstrap, étape 7) : vérifié
+   sur la machine — Colima arrêté, stack revenue seule en 91 s, conteneurs healthy,
+   collecteur réabonné. Alternative équivalente si on a le mot de passe admin :
+   `ops/launchd/com.local.colima.plist`. Détails : `ops/README.md`.
 3. **Collecteur capable de mourir en silence** : après le roulement d'échéances de 08:00 UTC, la session
    s'est reconnectée mais les abonnements sont restés muets pendant 53 h, alors que le heartbeat
    continuait d'arriver — donc ni la boucle de lecture ni le healthcheck « dernière trame reçue » ne

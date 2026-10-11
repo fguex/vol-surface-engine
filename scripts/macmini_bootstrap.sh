@@ -97,18 +97,10 @@ fi
 docker context use colima >/dev/null 2>&1 || true
 
 # Demarrage automatique : brew services installe un LaunchAgent, qui ne tourne
-# que dans une session graphique ouverte. Sur un Mac sans utilisateur connecte
-# au clavier (utilisateur console = root), le service ne demarrera PAS au boot :
-# il faut soit l'ouverture de session automatique, soit un LaunchDaemon systeme.
-CONSOLE_USER="$(stat -f %Su /dev/console 2>/dev/null || echo root)"
-if [ "$CONSOLE_USER" = "root" ]; then
-  echo "  ATTENTION: aucune session graphique (utilisateur console = root)."
-  echo "    -> colima ne redemarrera pas tout seul apres un reboot."
-  echo "    -> option 1 : Reglages > Utilisateurs > Ouverture de session automatique"
-  echo "    -> option 2 : LaunchDaemon systeme (necessite le mot de passe admin)"
-else
-  brew services list | grep -q "^colima.*started" || brew services start colima || true
-fi
+# que dans une session graphique ouverte ; et depuis une session SSH il echoue
+# ("launchctl enable gui/<uid>/sh.brew.colima" -> 125, domaine graphique non
+# pilotable a distance). Le redemarrage reel est donc assure par le garde-fou
+# cron de l'etape 7, qui fonctionne sans session graphique ni sudo.
 docker run --rm hello-world >/dev/null && echo "  docker run hello-world : OK"
 docker compose version
 
@@ -176,6 +168,18 @@ if [ "${status:-}" = "healthy" ]; then
 else
   echo "  ATTENTION: db pas healthy -> docker compose logs --tail 50 db"
 fi
+
+step "7. Garde-fou de demarrage (cron, sans session graphique ni sudo)"
+mkdir -p "$HOME/bin"
+cp "$REPO_DIR/ops/mini-stack-guard.sh" "$HOME/bin/mini-stack-guard.sh"
+chmod +x "$HOME/bin/mini-stack-guard.sh"
+CRON_TMP="$(mktemp)"
+crontab -l 2>/dev/null | grep -v mini-stack-guard > "$CRON_TMP" || true
+printf '*/5 * * * * %s/bin/mini-stack-guard.sh\n' "$HOME" >> "$CRON_TMP"
+crontab "$CRON_TMP"
+rm -f "$CRON_TMP"
+echo "  crontab : $(crontab -l | grep mini-stack-guard)"
+echo "  test : colima stop ; sleep 300 ; colima status   (doit revenir tout seul)"
 
 step "Termine"
 cat <<EOF
