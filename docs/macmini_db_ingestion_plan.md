@@ -130,8 +130,13 @@ Critère de sortie : `docker compose down` puis `up -d` → les tables et les li
 
 Objectif : un run à la main qui écrit en base, rejouable sans doublon.
 
-1. `docker compose build ingest`
-2. `docker compose run --rm ingest python -m python.jobs.ingest --tickers SPX`
+1. `docker compose --profile cboe build ingest`
+   (le service `ingest` est derrière le profil `cboe` : sans `--profile cboe`, compose ne le voit pas)
+2. `docker compose --profile cboe run --rm -T ingest python -m python.jobs.ingest --tickers SPX`
+   - `--tickers` ne peut PAS être passé seul : `docker compose run <service> <args>` REMPLACE la
+     commande du service. Il faut donc répéter la commande complète, sinon docker essaie
+     d'exécuter `--tickers` comme un binaire ("executable file not found in $PATH").
+   - `-T` : pas de pseudo-TTY (obligatoire quand on lance depuis un script / SSH).
 3. Vérifier
    - `SELECT snapshot_id, underlying, capture_slot, n_rows_raw FROM snapshot ORDER BY capture_slot DESC LIMIT 5;`
    - `SELECT count(*) FROM quote_curated;`
