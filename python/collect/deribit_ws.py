@@ -136,9 +136,23 @@ class BronzeWriter:
         d.mkdir(parents=True, exist_ok=True)
         return d / f"{time.strftime('%H%M%SZ', t)}.jsonl.zst"
 
+    def _unique(self, final: Path) -> Path:
+        """Deux sessions dans la meme fenetre d'heure (redemarrage, redeploiement)
+        visent le meme nom : le rename de la seconde ecraserait le fichier de la
+        premiere. Vecu : 8 526 lignes perdues a 10:48 apres un redeploiement.
+        On suffixe au lieu d'ecraser ; aucun fichier n'est jamais detruit ici."""
+        if not final.exists() and not final.with_suffix(final.suffix + ".part").exists():
+            return final
+        base = final.name[:-len(".jsonl.zst")]        # 080000Z.jsonl.zst -> 080000Z
+        for n in range(1, 1000):
+            cand = final.with_name(f"{base}-{n}.jsonl.zst")
+            if not cand.exists() and not cand.with_suffix(cand.suffix + ".part").exists():
+                return cand
+        raise RuntimeError(f"impossible de trouver un nom libre pour {final}")
+
     def _open(self, window: int) -> None:
         self.close()
-        final = self._path(window)
+        final = self._unique(self._path(window))
         tmp = final.with_suffix(final.suffix + ".part")
         self.fh = open(tmp, "wb")
         self.zw = self.cctx.stream_writer(self.fh)

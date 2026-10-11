@@ -123,3 +123,32 @@ def test_traverse_les_sous_dossiers_provider_date(tmp_path: Path) -> None:
 
     assert len(recovered) == 1
     assert w._final.exists()
+
+
+def test_deux_sessions_dans_la_meme_heure_ne_s_ecrasent_pas(tmp_path: Path) -> None:
+    """Un redemarrage dans la meme fenetre d'heure ne doit pas detruire le
+    fichier de la session precedente (vecu : 8 526 lignes perdues a 10:48)."""
+    root = tmp_path / "bronze"
+    now_ns = time.time_ns()
+
+    first = BronzeWriter(root, rotate_s=3600)
+    for i in range(2000):
+        first.write(now_ns, json.dumps({"params": {"channel": "quote.A", "data": {"i": i}}}))
+    first.close()
+
+    second = BronzeWriter(root, rotate_s=3600)
+    for i in range(2000):
+        second.write(now_ns, json.dumps({"params": {"channel": "quote.B", "data": {"i": i}}}))
+    second.close()
+
+    assert first._final != second._final, "le second fichier doit avoir un nom distinct"
+    assert first._final.exists(), "le fichier de la premiere session doit survivre"
+    assert second._final.exists()
+    assert second._final.name.endswith("-1.jsonl.zst"), second._final.name
+
+    # les deux contenus sont intacts et distincts
+    n1 = len(_read_lines(first._final))
+    n2 = len(_read_lines(second._final))
+    assert n1 == 2000 and n2 == 2000
+    assert b"quote.A" in _read_lines(first._final)[0]
+    assert b"quote.B" in _read_lines(second._final)[0]
