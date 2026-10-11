@@ -20,7 +20,9 @@ sur le Mac mini, le scheduler, le monitoring, les backups, et une stratégie de 
 
 Vérifié sur la machine, pas déduit :
 
-- **Mac mini** : `macmini-ai@macmini-ai.local`, macOS 14.0 arm64, FileVault OFF, sleep 0 / autorestart 1.
+- **Mac mini** : `macmini-ai@macmini-ai.local`, FileVault OFF, sleep 0 / autorestart 1.
+  macOS 14.0 arm64 le matin, **mis à jour vers 27.0.1 (26A434)** dans la journée : le contournement
+  `git` n'est plus nécessaire (Homebrew utilise le git d'Apple), et Colima tourne sans changement.
   Colima 4 CPU / 6 Go / 60 Go, Docker + compose + buildx installés, `uv 0.13` via l'installeur officiel.
 - **Repo** : `~/vol-surface-engine` (clone du dépôt public), `.env` généré avec un mot de passe aléatoire (chmod 600).
 - **Collecteur Deribit** : `healthy`, 1 726 instruments, ~140 msg/s, zéro drop, `subscribed: true` dans `health.json`.
@@ -46,6 +48,16 @@ Vérifié sur la machine, pas déduit :
    voyaient le problème. Correctif : horodatage de la dernière **donnée** (le heartbeat ne compte pas),
    watchdog de silence, `open_timeout` sur la connexion, gestion d'exception large dans le lecteur.
    `health.json` expose maintenant `last_data_at`, `idle_s`, `subscribed`, `stale_events`.
+4. **Perte silencieuse du bronze au redémarrage** (11 oct., après le reboot de mise à jour macOS) :
+   deux fuites trouvées et corrigées le même jour.
+   - un arrêt brutal laisse le fichier en `.part`, invisible pour tout ce qui lit `*.jsonl.zst` :
+     le redémarrage le récupère maintenant (mesuré sur le fichier réel : **122 962 lignes** sauvées,
+     0 JSON invalide, compte identique à `zstd -d -c`). Le `.part` est rangé en `.corrupt`, jamais supprimé.
+   - un redémarrage **dans la même heure** visait le même nom de fichier et écrasait celui de la
+     session précédente (8 526 lignes perdues à 10:48). Les fichiers suivants sont suffixés `-1`, `-2`...
+5. **Le coût chiffré du trou de démarrage** : après la mise à jour, Colima n'est pas revenu tout seul
+   (voir piège 2) → aucun tick collecté de 09:26 à 18:24 UTC, soit **9 h de marché manquantes**.
+   C'est la mesure qui justifie de traiter le point 2 avant tout le reste.
 
 ---
 
