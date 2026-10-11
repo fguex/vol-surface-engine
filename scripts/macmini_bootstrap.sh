@@ -35,10 +35,26 @@ eval "$(/opt/homebrew/bin/brew shellenv)"
 grep -q "brew shellenv" "$HOME/.zprofile" 2>/dev/null \
   || echo 'eval "$(/opt/homebrew/bin/brew shellenv)"' >> "$HOME/.zprofile"
 
+# Homebrew peut installer un git compile pour un macOS plus recent : le binaire
+# s'execute mais casse sur HTTPS (symbole libcurl absent de l'OS), ce qui fait
+# echouer silencieusement "brew update" ... et le clone du repo. On garde le git
+# d'Apple (/usr/bin/git) tant que ce n'est pas regle.
+if ! git ls-remote --exit-code https://github.com/Homebrew/brew >/dev/null 2>&1; then
+  echo "  git du PATH ne fait pas d'HTTPS -> retour au git d'Apple"
+  if [ -x /opt/homebrew/bin/git ]; then
+    brew uninstall --ignore-dependencies git >/dev/null 2>&1 || true
+  fi
+  hash -r 2>/dev/null || true
+  export PATH="/usr/bin:/bin:$PATH"
+  git ls-remote --exit-code https://github.com/Homebrew/brew >/dev/null 2>&1 \
+    || die "aucun git fonctionnel en HTTPS (installer Command Line Tools)"
+fi
+echo "  git : $(command -v git) ($(git --version))"
+
 # --------------------------------------------------------------------------
 step "1. Outils Homebrew"
 brew update --quiet
-for f in git uv colima docker docker-compose docker-buildx; do
+for f in git colima docker docker-compose docker-buildx; do
   if brew list --formula "$f" >/dev/null 2>&1; then
     echo "  $f : deja installe"
   else
@@ -46,6 +62,15 @@ for f in git uv colima docker docker-compose docker-buildx; do
     brew install --quiet "$f"
   fi
 done
+
+# uv : pas de bouteille pour les macOS anciens -> brew le compilerait depuis les
+# sources (Rust, plusieurs minutes). L'installeur officiel livre un binaire
+# precompile, on le prefere.
+if ! command -v uv >/dev/null 2>&1; then
+  curl -LsSf https://astral.sh/uv/install.sh | sh
+fi
+export PATH="$HOME/.local/bin:$PATH"
+echo "  uv : $(command -v uv) ($(uv --version))"
 
 # Plugins docker (compose, buildx) installes par brew : il faut dire au CLI ou ils sont.
 mkdir -p "$HOME/.docker"
@@ -69,9 +94,21 @@ if colima status >/dev/null 2>&1; then
 else
   colima start --vm-type vz --cpu "$COLIMA_CPU" --memory "$COLIMA_MEM" --disk "$COLIMA_DISK"
 fi
-# demarrage automatique a l'ouverture de session
-brew services list | grep -q "^colima.*started" || brew services start colima
 docker context use colima >/dev/null 2>&1 || true
+
+# Demarrage automatique : brew services installe un LaunchAgent, qui ne tourne
+# que dans une session graphique ouverte. Sur un Mac sans utilisateur connecte
+# au clavier (utilisateur console = root), le service ne demarrera PAS au boot :
+# il faut soit l'ouverture de session automatique, soit un LaunchDaemon systeme.
+CONSOLE_USER="$(stat -f %Su /dev/console 2>/dev/null || echo root)"
+if [ "$CONSOLE_USER" = "root" ]; then
+  echo "  ATTENTION: aucune session graphique (utilisateur console = root)."
+  echo "    -> colima ne redemarrera pas tout seul apres un reboot."
+  echo "    -> option 1 : Reglages > Utilisateurs > Ouverture de session automatique"
+  echo "    -> option 2 : LaunchDaemon systeme (necessite le mot de passe admin)"
+else
+  brew services list | grep -q "^colima.*started" || brew services start colima || true
+fi
 docker run --rm hello-world >/dev/null && echo "  docker run hello-world : OK"
 docker compose version
 
@@ -114,18 +151,38 @@ docker compose up -d collector
 echo "  attente du healthcheck (max 3 min)..."
 for _ in $(seq 1 36); do
   status="$(docker inspect -f '{{.State.Health.Status}}' "$(docker compose ps -q collector)" 2>/dev/null || echo none)"
-  [ "$status" = "healthy" ] && break
+  if [ "$status" = "healthy" ]; then break; fi
   sleep 5
 done
 docker compose ps collector
 [ -f data/deribit/health.json ] && cat data/deribit/health.json && echo
 [ "${status:-}" = "healthy" ] || die "collecteur pas healthy : docker compose logs --tail 50 collector"
 
+step "6. Base de donnees (TimescaleDB, volume persistant)"
+docker compose up -d db
+echo "  attente du healthcheck (max 2 min)..."
+for _ in $(seq 1 24); do
+  status="$(docker inspect -f '{{.State.Health.Status}}' "$(docker compose ps -q db)" 2>/dev/null || echo none)"
+  if [ "$status" = "healthy" ]; then break; fi
+  sleep 5
+done
+docker compose ps db
+if [ "${status:-}" = "healthy" ]; then
+  docker compose exec -T db psql -U vse -d volsurface -c '\dt' | head -20
+  docker compose exec -T db psql -U vse -d volsurface -tAc \
+    "select extname||' '||extversion from pg_extension where extname='timescaledb'"
+  docker compose exec -T db psql -U vse -d volsurface -tAc \
+    "select hypertable_name from timescaledb_information.hypertables order by 1"
+else
+  echo "  ATTENTION: db pas healthy -> docker compose logs --tail 50 db"
+fi
+
 step "Termine"
 cat <<EOF
   Logs en direct      : cd $REPO_DIR && docker compose logs -f collector
   Etat                : docker compose ps collector ; cat data/deribit/health.json
   Rapport de qualite  : .venv/bin/python -m python.collect.analyze_bronze data/deribit
+  Base de donnees     : docker compose ps db ; docker compose exec db psql -U vse -d volsurface
   Mise a jour du code : git pull && docker compose build collector && docker compose up -d collector
   Arret propre        : docker compose stop collector   (jamais 'down -v')
 EOF
