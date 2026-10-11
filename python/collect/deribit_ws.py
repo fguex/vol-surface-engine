@@ -60,6 +60,64 @@ def channels_for(instruments: list[str]) -> list[str]:
 
 
 # --------------------------------------------------------------------------
+# Recuperation des fichiers .part laisses par un arret brutal
+# --------------------------------------------------------------------------
+def recover_stale_parts(root: Path, min_age_s: float = 60.0, level: int = 6) -> list[dict]:
+    """Un arret non propre (reboot, kill -9, coupure) laisse un fichier .part :
+    les octets sont sur le disque mais invisibles pour tout ce qui lit
+    *.jsonl.zst, donc perdus en silence. On recupere ce qui est lisible (un
+    flux zstd tronque perd sa queue, pas sa tete), on recompresse dans un
+    fichier propre et on range le .part en .corrupt pour inspection.
+
+    Les fichiers plus recents que min_age_s sont ignores : ils sont peut-etre
+    en cours d'ecriture par une session vivante.
+    """
+    recovered: list[dict] = []
+    for part in sorted(root.rglob("*.jsonl.zst.part")):
+        try:
+            if time.time() - part.stat().st_mtime < min_age_s:
+                continue
+        except OSError:
+            continue
+
+        chunks: list[bytes] = []
+        dctx = zstandard.ZstdDecompressor()
+        # Decompression INCREMENTALE : un read(n) global leve sur la troncature
+        # avant d'avoir rien rendu, et on perdrait tout. En nourrissant les
+        # octets compresses par morceaux, on garde ce qui est decodable.
+        dobj = dctx.decompressobj()
+        try:
+            with open(part, "rb") as fh:
+                while True:
+                    block = fh.read(1 << 20)
+                    if not block:
+                        break
+                    out = dobj.decompress(block)
+                    if out:
+                        chunks.append(out)
+        except (zstandard.ZstdError, OSError):
+            pass                      # troncature en fin de flux : le reste est bon
+
+        data = b"".join(chunks)
+        lines = [line for line in data.split(b"\n")[:-1] if line.strip()]
+
+        final = part.with_suffix("")            # x.jsonl.zst.part -> x.jsonl.zst
+        if lines:
+            tmp = final.with_suffix(final.suffix + ".tmp")
+            cctx = zstandard.ZstdCompressor(level=level)
+            with open(tmp, "wb") as fh, cctx.stream_writer(fh) as zw:
+                for line in lines:
+                    zw.write(line + b"\n")
+            os.replace(tmp, final)
+
+        os.replace(part, part.with_suffix(part.suffix + ".corrupt"))
+        recovered.append({"file": final.name if lines else part.name,
+                          "recovered_lines": len(lines),
+                          "bytes_part": part.stat().st_size if part.exists() else 0})
+    return recovered
+
+
+# --------------------------------------------------------------------------
 # Ecrivain bronze : rotation par fenetre de temps, zstd en streaming
 # --------------------------------------------------------------------------
 class BronzeWriter:
@@ -321,6 +379,10 @@ class Collector:
         loop = asyncio.get_running_loop()
         for sig in (signal.SIGTERM, signal.SIGINT):
             loop.add_signal_handler(sig, self.stop.set)
+        # Avant tout : rapatrier ce qu'un arret brutal a laisse en .part.
+        for rec in recover_stale_parts(self.writer.root):
+            log.warning("bronze: .part recupere %s (%d lignes)", rec["file"], rec["recovered_lines"])
+            self.event("bronze_recovered", **rec)
         self.event("start", duration=duration)
         tasks = [asyncio.create_task(self.reader()),
                  asyncio.create_task(self.writer_loop()),
