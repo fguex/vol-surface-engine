@@ -24,6 +24,7 @@ import time
 import urllib.request
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 import websockets
 import zstandard
@@ -34,6 +35,9 @@ CURRENCIES = ("BTC", "ETH")
 SUB_BATCH = 200            # canaux par requete public/subscribe
 HEARTBEAT_S = 10
 QUEUE_MAX = 200_000
+OPEN_TIMEOUT_S = 15        # sans ca, un connect() qui traine bloque le lecteur
+CONNECT_CLOSE_TIMEOUT_S = 10
+STALE_S = 300              # aucune donnee de souscription pendant ce delai -> reconnexion
 
 log = logging.getLogger("deribit_ws")
 
@@ -114,10 +118,13 @@ class Stats:
     dropped: int = 0
     reconnects: int = 0
     by_kind: dict = field(default_factory=dict)
+    last_data_at: float = field(default_factory=time.time)
+    stale_events: int = 0
 
 
 class Collector:
-    def __init__(self, out: Path, rotate_s: int, chaos_at: float | None):
+    def __init__(self, out: Path, rotate_s: int, chaos_at: float | None,
+                 stale_s: float = STALE_S):
         self.out = out
         self.queue: asyncio.Queue = asyncio.Queue(maxsize=QUEUE_MAX)
         self.writer = BronzeWriter(out / "bronze", rotate_s)
@@ -126,7 +133,9 @@ class Collector:
         self.stop = asyncio.Event()
         self.chaos_at = chaos_at
         self.instruments: list[str] = []
-        self._ws = None
+        self._ws: Any = None
+        self._subscribed = False
+        self.stale_s = stale_s
 
     def event(self, kind: str, **kw) -> None:
         rec = {"t_ns": time.time_ns(), "event": kind, **kw}
@@ -140,51 +149,72 @@ class Collector:
         chans = channels_for(self.instruments)
         # max_queue : le buffer par defaut (16 trames) deborde pendant la rafale
         # initiale (1 snapshot par canal) -> Deribit coupe avec "connection too slow".
-        async with websockets.connect(WS_URL, max_size=2**24, max_queue=8192,
-                                      ping_interval=None) as ws:
-            self._ws = ws
-            self.event("connected", n_instruments=len(self.instruments), n_channels=len(chans))
-            await ws.send(json.dumps({"jsonrpc": "2.0", "id": 1, "method": "public/set_heartbeat",
-                                      "params": {"interval": HEARTBEAT_S}}))
-            pending = {}
-            for i in range(0, len(chans), SUB_BATCH):
-                rid = 1000 + i
-                pending[rid] = len(chans[i:i + SUB_BATCH])
-                await ws.send(json.dumps({"jsonrpc": "2.0", "id": rid, "method": "public/subscribe",
-                                          "params": {"channels": chans[i:i + SUB_BATCH]}}))
-            subscribed = 0
-            while not self.stop.is_set():
-                # timeout > 2x heartbeat : si rien n'arrive, la connexion est morte
-                raw = await asyncio.wait_for(ws.recv(), timeout=3 * HEARTBEAT_S)
-                recv_ns = time.time_ns()
-                if isinstance(raw, bytes):
-                    raw = raw.decode()
-                # filtre texte bon marche : pas de json.loads sur le chemin chaud
-                if '"method":"subscription"' in raw[:60]:
-                    try:
-                        self.queue.put_nowait((recv_ns, raw))
-                    except asyncio.QueueFull:
-                        self.stats.dropped += 1
-                    continue
-                m = json.loads(raw)
-                if m.get("method") == "heartbeat":
-                    if m["params"].get("type") == "test_request":
-                        await ws.send(json.dumps({"jsonrpc": "2.0", "id": 2, "method": "public/test"}))
-                elif m.get("id") in pending:
-                    if "error" in m:
-                        self.event("subscribe_error", error=m["error"])
-                    else:
-                        subscribed += len(m["result"])
-                        pending.pop(m["id"])
-                        if not pending:
-                            self.event("subscribed", n_channels=subscribed, requested=len(chans))
+        # open_timeout : sans lui un connect() qui traine bloque le lecteur
+        # indefiniment (vecu : 53 h de silence avec un process "vivant").
+        try:
+            async with websockets.connect(WS_URL, max_size=2**24, max_queue=8192,
+                                          ping_interval=None,
+                                          open_timeout=OPEN_TIMEOUT_S,
+                                          close_timeout=CONNECT_CLOSE_TIMEOUT_S) as ws:
+                self._ws = ws
+                self.event("connected", n_instruments=len(self.instruments), n_channels=len(chans))
+                await ws.send(json.dumps({"jsonrpc": "2.0", "id": 1, "method": "public/set_heartbeat",
+                                          "params": {"interval": HEARTBEAT_S}}))
+                pending = {}
+                for i in range(0, len(chans), SUB_BATCH):
+                    rid = 1000 + i
+                    pending[rid] = len(chans[i:i + SUB_BATCH])
+                    await ws.send(json.dumps({"jsonrpc": "2.0", "id": rid, "method": "public/subscribe",
+                                              "params": {"channels": chans[i:i + SUB_BATCH]}}))
+                subscribed = 0
+                while not self.stop.is_set():
+                    # timeout > 2x heartbeat : si rien n'arrive, la connexion est morte
+                    raw = await asyncio.wait_for(ws.recv(), timeout=3 * HEARTBEAT_S)
+                    recv_ns = time.time_ns()
+                    if isinstance(raw, bytes):
+                        raw = raw.decode()
+                    # filtre texte bon marche : pas de json.loads sur le chemin chaud
+                    if '"method":"subscription"' in raw[:60]:
+                        # Horodatage de la derniere DONNEE (le heartbeat ne compte pas) :
+                        # c'est la seule horloge qui distingue "ca marche" de
+                        # "abonne mais muet", cas que le heartbeat masque completement.
+                        self.stats.last_data_at = time.time()
+                        try:
+                            self.queue.put_nowait((recv_ns, raw))
+                        except asyncio.QueueFull:
+                            self.stats.dropped += 1
+                        continue
+                    m = json.loads(raw)
+                    if m.get("method") == "heartbeat":
+                        if m["params"].get("type") == "test_request":
+                            await ws.send(json.dumps({"jsonrpc": "2.0", "id": 2, "method": "public/test"}))
+                    elif m.get("id") in pending:
+                        if "error" in m:
+                            self.event("subscribe_error", error=m["error"])
+                        else:
+                            subscribed += len(m["result"])
+                            pending.pop(m["id"])
+                            if not pending:
+                                self._subscribed = True
+                                self.stats.last_data_at = time.time()
+                                self.event("subscribed", n_channels=subscribed, requested=len(chans))
+        finally:
+            # Session terminee : plus rien n'est fiable tant qu'on n'a pas
+            # reconnecte ET re-abonne. Le watchdog et instrument_refresh lisent ca.
+            self._ws = None
+            self._subscribed = False
 
     async def reader(self) -> None:
         backoff = 1.0
         while not self.stop.is_set():
             try:
                 await self._session()
-            except (websockets.ConnectionClosed, asyncio.TimeoutError, OSError) as exc:
+            except asyncio.CancelledError:
+                raise
+            except Exception as exc:  # noqa: BLE001
+                # Volontairement large : le lecteur ne doit JAMAIS mourir. Une
+                # exception non prevue (API websockets, parse, OS) doit mener a
+                # une reconnexion, pas a un collecteur zombi.
                 if self.stop.is_set():
                     break
                 self.stats.reconnects += 1
@@ -215,9 +245,10 @@ class Collector:
             await asyncio.sleep(every)
             d = self.stats.msgs - last
             last = self.stats.msgs
-            log.info("stats: %.0f msg/s, queue=%d, dropped=%d, reconnects=%d, kinds=%s",
+            log.info("stats: %.0f msg/s, queue=%d, dropped=%d, reconnects=%d, idle=%.0fs, kinds=%s",
                      d / every, self.queue.qsize(), self.stats.dropped,
-                     self.stats.reconnects, self.stats.by_kind)
+                     self.stats.reconnects, time.time() - self.stats.last_data_at,
+                     self.stats.by_kind)
 
     async def chaos(self) -> None:
         """Coupe volontairement la connexion pour tester la reprise."""
@@ -225,6 +256,25 @@ class Collector:
         if self._ws is not None:
             self.event("chaos_close")
             await self._ws.close()
+
+    async def watchdog(self, every_s: float = 15.0) -> None:
+        """Filet de securite : le heartbeat de Deribit continue d'arriver meme
+        quand les abonnements sont morts, donc la boucle de lecture ne voit rien.
+        Si plus AUCUNE donnee n'entre alors qu'on se declare abonne, on ferme la
+        connexion -> le lecteur reconnecte et se re-abonne proprement."""
+        while not self.stop.is_set():
+            await asyncio.sleep(every_s)
+            if not self._subscribed or self._ws is None:
+                continue          # pas encore abonne : rien a surveiller
+            idle = time.time() - self.stats.last_data_at
+            if idle > self.stale_s:
+                self.stats.stale_events += 1
+                self.event("stale_watchdog", idle_s=round(idle, 1),
+                           threshold_s=self.stale_s, reconnects=self.stats.reconnects)
+                try:
+                    await self._ws.close()
+                except Exception as exc:  # noqa: BLE001
+                    log.warning("stale_watchdog: close a echoue: %s", exc)
 
     async def instrument_refresh(self, every_s: int = 900) -> None:
         """Echeances qui expirent (08:00 UTC) / nouvelles listees : si la liste
@@ -238,7 +288,7 @@ class Collector:
             except OSError as exc:
                 log.warning("instrument refresh failed: %s", exc)
                 continue
-            if set(fresh) != set(self.instruments) and self._ws is not None:
+            if set(fresh) != set(self.instruments) and self._subscribed and self._ws is not None:
                 added = sorted(set(fresh) - set(self.instruments))
                 removed = sorted(set(self.instruments) - set(fresh))
                 self.event("instrument_refresh", added=len(added), removed=len(removed),
@@ -255,6 +305,10 @@ class Collector:
             tmp = path.with_suffix(".tmp")
             tmp.write_text(json.dumps({
                 "updated_at": time.time(), "last_msg_at": last_change,
+                "last_data_at": self.stats.last_data_at,
+                "idle_s": round(time.time() - self.stats.last_data_at, 1),
+                "subscribed": self._subscribed,
+                "stale_events": self.stats.stale_events,
                 "msgs": self.stats.msgs, "dropped": self.stats.dropped,
                 "reconnects": self.stats.reconnects, "queue": self.queue.qsize(),
                 "n_instruments": len(self.instruments)}))
@@ -272,6 +326,7 @@ class Collector:
                  asyncio.create_task(self.writer_loop()),
                  asyncio.create_task(self.reporter()),
                  asyncio.create_task(self.instrument_refresh()),
+                 asyncio.create_task(self.watchdog()),
                  asyncio.create_task(self.health())]
         if self.chaos_at:
             tasks.append(asyncio.create_task(self.chaos()))
@@ -300,9 +355,11 @@ def main() -> None:
     p.add_argument("--rotate", type=int, default=3600, help="secondes par fichier bronze")
     p.add_argument("--out", type=Path, default=Path(os.environ.get("DATA_DIR", "data")) / "deribit")
     p.add_argument("--chaos-at", type=float, default=None, help="couper la connexion apres N s")
+    p.add_argument("--stale-timeout", type=float, default=STALE_S,
+                   help="secondes sans donnee abonnee avant reconnexion forcee")
     a = p.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-    asyncio.run(Collector(a.out, a.rotate, a.chaos_at).run(a.duration))
+    asyncio.run(Collector(a.out, a.rotate, a.chaos_at, a.stale_timeout).run(a.duration))
 
 
 if __name__ == "__main__":
