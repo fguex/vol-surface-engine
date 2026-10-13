@@ -160,7 +160,14 @@ for _ in $(seq 1 24); do
 done
 docker compose ps db
 if [ "${status:-}" = "healthy" ]; then
-  docker compose exec -T db psql -U vse -d volsurface -c '\dt' | head -20
+  # Les tables viennent des migrations versionnees, pas de l'entrypoint Docker
+  # (qui ne se declenche qu'a la premiere initialisation du volume, sans trace).
+  echo "  application des migrations..."
+  set -a; . "$REPO_DIR/.env"; set +a
+  PGHOST=127.0.0.1 PGUSER=vse PGDATABASE=volsurface PGPASSWORD="$POSTGRES_PASSWORD" \
+    PYTHONPATH="$REPO_DIR" "$REPO_DIR/.venv/bin/python" -m python.db.migrate --sql-dir "$REPO_DIR/sql"
+  PGHOST=127.0.0.1 PGUSER=vse PGDATABASE=volsurface PGPASSWORD="$POSTGRES_PASSWORD" \
+    PYTHONPATH="$REPO_DIR" "$REPO_DIR/.venv/bin/python" -m python.db.migrate --status --sql-dir "$REPO_DIR/sql"
   docker compose exec -T db psql -U vse -d volsurface -tAc \
     "select extname||' '||extversion from pg_extension where extname='timescaledb'"
   docker compose exec -T db psql -U vse -d volsurface -tAc \

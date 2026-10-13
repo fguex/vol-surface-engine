@@ -123,11 +123,17 @@ Piège à connaître : les scripts de `/docker-entrypoint-initdb.d` ne s'exécut
 est vide. Toute modification future du schéma ne sera pas appliquée automatiquement.
 → Phase 1b : migrations.
 
-Phase 1b — Migrations minimales
-- Fichiers numérotés `sql/001_schema.sql`, `sql/002_....sql`, …
-- Table `schema_migrations(version TEXT PRIMARY KEY, applied_at TIMESTAMPTZ)`
-- Petit script `python/db/migrate.py` : applique dans l'ordre les fichiers non encore appliqués,
-  chacun dans une transaction. Lancé avant chaque déploiement.
+Phase 1b — Migrations : FAIT (13 oct. 2026)
+- `sql/NNN_nom.sql` + `python/db/migrate.py` (voir ops/README.md pour l'usage).
+- `schema_migrations(version, name, checksum sha256, applied_at, applied_by, duration_ms, note)`.
+- Garde-fou : une migration appliquée ne se modifie plus (le runner refuse, exit 3, avant
+  toute action) ; `--baseline-through NNN` pour enregistrer sans exécuter sur une base
+  existante ; `--target`, `--dry-run`, `--status` ; verrou consultatif ; transaction par
+  défaut, `-- migrate:no-transaction` pour `CREATE INDEX CONCURRENTLY`.
+- `docker-entrypoint-initdb.d` n'est plus utilisé : les migrations sont la seule source de
+  vérité, pour une base neuve comme pour une base existante.
+- État sur le mini : 001 enregistrée en baseline (appliquée à la main le 11 oct.), 002
+  (btree_gist) appliquée. 28 tests passent, dont 8 d'intégration contre la vraie base.
 - Pas besoin d'Alembic/Flyway à ce stade.
 
 Commandes
