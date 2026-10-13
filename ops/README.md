@@ -79,18 +79,37 @@ code 1. Un disque débranché est donc un cas normal et visible, pas un plantage
 
 ### Restaurer — un backup jamais restauré n'est pas un backup
 
+`ops/restore-dump.sh` restaure un dump dans une base jetable et **compare avec la production** :
+c'est le test de sauvegarde, rejouable à volonté.
+
 ```bash
-cd ~/vol-surface-engine
-set -a; . ./.env; set +a
-export PGHOST=127.0.0.1 PGUSER=vse PGPASSWORD="$POSTGRES_PASSWORD"
-docker compose exec -T db psql -U vse -d volsurface -c 'CREATE DATABASE restore_test'
-docker compose exec -T db pg_restore -U vse -d restore_test --no-owner < "/Volumes/Element1_APFS/Quant DB/db/volsurface-YYYY-MM-DD.dump"
-docker compose exec -T db psql -U vse -d restore_test -tAc 'select count(*) from quote_curated'
-docker compose exec -T db psql -U vse -d volsurface -c 'DROP DATABASE restore_test'
+~/vol-surface-engine/ops/restore-dump.sh "/Volumes/Element1_APFS/Quant DB/db/volsurface-2026-10-13.dump"
 ```
 
-Testé pour de vrai le 13 oct. : restauration du dump dans une base vide puis comparaison des
-comptes avec la production.
+Il refuse de viser `volsurface`, supprime la base de test à la fin (`--keep` pour la garder),
+et sort 0 seulement si la restauration n'a **aucune** erreur et que les comptes sont identiques.
+
+Trois choses mesurées le 13 oct. sur TimescaleDB 2.30, qui ne se devinent pas :
+
+1. L'extension `timescaledb` doit exister **dans la base cible avant** `timescaledb_pre_restore()`.
+   Sinon la fonction n'existe pas — elle est fournie par l'extension, pas par le serveur, et
+   l'erreur (`function does not exist`) ne dit pas pourquoi.
+2. Avec la bonne séquence : **0 erreur, 0 avertissement**, hypertables, index et clés
+   étrangères restaurés à l'identique.
+3. Sans elle : 2 erreurs (contrainte sur un chunk interne, `ONLY` sur une hypertable) et la
+   clé étrangère `quote_curated_snapshot_id_fkey` manquante après restauration. Les données
+   restent complètes, la clé se recrée d'un `ALTER TABLE ... ADD CONSTRAINT`, mais autant
+   faire les choses dans le bon ordre.
+
+Séquence exacte, si tu préfères à la main :
+
+```bash
+docker compose exec -T db psql -U vse -d volsurface -c 'CREATE DATABASE restore_test'
+docker compose exec -T db psql -U vse -d restore_test -c 'CREATE EXTENSION IF NOT EXISTS timescaledb'
+docker compose exec -T db psql -U vse -d restore_test -tAc 'SELECT timescaledb_pre_restore()'
+docker compose exec -T db pg_restore -U vse -d restore_test --no-owner < DUMP
+docker compose exec -T db psql -U vse -d restore_test -tAc 'SELECT timescaledb_post_restore()'
+```
 
 ### Sauvegarder hors machine (3-2-1)
 
