@@ -85,11 +85,9 @@ def test_canaux_incluent_ce_qui_manquait() -> None:
         "estimated_expiration_price.btc_usd",
         "deribit_price_ranking.btc_usd",
         "ticker.BTC-PERPETUAL.100ms",
-        "perpetual.BTC-PERPETUAL",
         "trades.BTC-PERPETUAL.100ms",
-        "block_trades.BTC",
-        "block_trades.ETH",
         "ticker.ETH-PERPETUAL.100ms",
+        "trades.ETH-PERPETUAL.100ms",
     ]:
         assert attendu in chans, attendu
 
@@ -106,4 +104,13 @@ def test_canaux_ticker_seulement_sur_le_sous_ensemble() -> None:
 def test_canaux_sans_subset() -> None:
     chans = channels_for([], [])
     assert not any(c.startswith("ticker.BTC-") and "PERPETUAL" not in c for c in chans)
-    assert len(chans) == 20  # 10 canaux par devise, tous "always on"
+    assert len(chans) == 16  # 8 canaux par devise, tous toujours actifs
+
+
+def test_aucun_canal_inexistant() -> None:
+    """perpetual.* et block_trades.* n'existent pas : Deribit accepte la requete et
+    n'abonne rien, sans erreur. Une souscription muette est un echec silencieux :
+    on verifie que la liste n'en contient plus (funding et base viennent du ticker
+    du perpetuel, les prints de bloc de trades.option)."""
+    chans = channels_for(["BTC-24SEP27-100000-C"], ["BTC-24SEP27-100000-C"])
+    assert not [c for c in chans if c.startswith(("perpetual.", "block_trades."))]

@@ -92,7 +92,7 @@ def select_ticker_subset(instruments: list[str], spots: dict[str, float],
     """n instruments par devise pour le canal ticker.{instrument} (le seul qui porte
     les greeks, l'open interest et bid/ask IV).
 
-    Le canal ticker coute ~1 msg/s et ~770 octets par instrument : le prendre sur
+    Le canal ticker coute ~0,3 a 1 msg/s et ~770 octets par instrument : le prendre sur
     toute la chaine ferait ~60 Go/jour. On prend donc une bande ATM : les `expiries`
     echeances les plus proches, et autour du spot moitie calls / moitie puts.
     """
@@ -131,10 +131,12 @@ def channels_for(instruments: list[str], ticker_instruments: list[str] = ()) -> 
 
     quote.* = meilleur bid/ask (98 % du volume, la microstructure).
     Les canaux par devise ajoutent ce qui manquait : mark_iv et mark_price par strike
-    pour TOUTE la chaine (markprice.options, ~1 msg/s par devise), DVOL, le perpetuel
-    (funding, open interest, base), la reference de settlement, la composition de
-    l'indice, et les prints de bloc. Cout total : ~10 msg/s.
-    ticker.* uniquement sur la bande ATM : greeks + open interest + bid/ask IV.
+    pour TOUTE la chaine (markprice.options, ~1 msg/s par devise), DVOL, la reference
+    de settlement et la composition de l'indice. Cout total : ~5 msg/s.
+    ticker.* sur la bande ATM : greeks + open interest + bid/ask IV ; le ticker du
+    perpetuel porte le funding et la base. Les prints de bloc arrivent dans
+    trades.option (champs block_trade_id / block_trade_leg_count), inutile de
+    s'abonner a un canal dedie : il n'en existe pas.
     """
     chans = [f"quote.{n}" for n in instruments]
     for cur in CURRENCIES:
@@ -147,9 +149,7 @@ def channels_for(instruments: list[str], ticker_instruments: list[str] = ()) -> 
             f"estimated_expiration_price.{low}_usd",  # reference de settlement
             f"deribit_price_ranking.{low}_usd",       # composition de l'indice
             f"ticker.{cur}-PERPETUAL.100ms",          # funding, OI, base
-            f"perpetual.{cur}-PERPETUAL",
             f"trades.{cur}-PERPETUAL.100ms",
-            f"block_trades.{cur}",
         ]
     chans += [f"ticker.{n}.100ms" for n in ticker_instruments]
     return chans
