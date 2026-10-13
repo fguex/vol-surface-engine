@@ -42,9 +42,16 @@ Deux entrées, toutes deux pointant sur le **repo** (pas sur une copie dans `~/b
 un `git pull` met donc à jour le comportement, et deux copies ne peuvent pas diverger.
 
 ```
-*/5 * * * *  ~/vol-surface-engine/ops/mini-stack-guard.sh   # remet Colima + la stack en route
-30  2 * * *  ~/vol-surface-engine/ops/mini-backup.sh        # sauvegarde vers le disque externe
+*/5 * * * *  ~/vol-surface-engine/ops/mini-stack-guard.sh              # remet Colima + la stack en route
+ 5  * * * *  ~/vol-surface-engine/ops/mini-backup.sh --bronze-only     # bronze -> disque externe (horaire)
+30  2 * * *  ~/vol-surface-engine/ops/mini-backup.sh                   # bronze + dump de la base (quotidien)
 ```
+
+Deux rythmes, parce que les deux objets n'ont pas la même nature : le bronze grandit en continu
+(quelques Mo par heure, irremplaçable, il part toutes les heures à `:05`, cinq minutes après la
+rotation du fichier en cours) ; le dump de la base est petit et c'est la référence restaurable,
+le dupliquer 24 fois par jour n'apporterait rien. `~/backup_status.json` garde les deux
+fraîcheurs séparément (`last_bronze_*` et `last_full_dump_*`).
 
 Rien à voir dans la sortie : les deux scripts sont silencieux quand tout va bien. Leurs
 traces sont dans `~/stack-guard.log` et `~/backup.log`.

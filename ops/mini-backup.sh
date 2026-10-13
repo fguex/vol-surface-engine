@@ -12,16 +12,29 @@
 # Ce qu'il fait
 # -------------
 #   1. verifie que le volume est bien monte, que le marqueur est present, et l'espace libre
-#   2. pg_dump -Fc de la base (format custom, restaurable avec pg_restore)
-#   3. verifie que le dump est lisible (pg_restore --list), sinon il est marque .invalide
-#   4. rsync du bronze Deribit (incremental, append-only, les .part en cours sont ignores)
-#   5. purge les dumps au-dela de KEEP_DUMPS jours
-#   6. ecrit ~/backup_status.json et ~/backup.log
+#   2. rsync du bronze Deribit (incremental : seuls les nouveaux fichiers de l'heure passent)
+#   3. pg_dump -Fc de la base, puis verification que le dump est lisible (pg_restore --list)
+#   4. purge les dumps au-dela de KEEP_DUMPS jours
+#   5. ecrit ~/backup_status.json et ~/backup.log
+#
+# Deux rythmes, parce que les deux objets n'ont pas la meme nature :
+#   --bronze-only   toutes les heures : le bronze grandit en continu, quelques Mo a copier
+#   (defaut)        une fois par jour : bronze + dump de la base (petit, et c'est la
+#                   reference restaurable ; le dupliquer 24 fois par jour n'apporte rien)
 #
 # Installation et planification : voir ops/README.md.
 
 set -u
 export PATH="/opt/homebrew/bin:/usr/sbin:/usr/bin:/bin"
+
+# Options : --bronze-only (copie le bronze, pas la base) ; --keep-dumps N
+BRONZE_ONLY=0
+for a in "$@"; do
+  case "$a" in
+    --bronze-only) BRONZE_ONLY=1 ;;
+    *) echo "option inconnue : $a" >&2; exit 2 ;;
+  esac
+done
 
 REPO="${REPO:-$HOME/vol-surface-engine}"
 VOLUME="${VSE_BACKUP_VOLUME:-/Volumes/Element1_APFS}"     # surchargeable : sert aux tests
@@ -87,28 +100,16 @@ say "volume ok : $DEST | libre $(df -h "$DEST" | tail -1 | awk '{print $4}') | b
 
 mkdir -p "$LOGDIR" "$DEST/bronze" "$DEST/db"
 
-# --- 2. dump de la base ---
 HORODATE="$(date -u '+%Y-%m-%d')"
-DUMP="$DEST/db/volsurface-$HORODATE.dump"
 T0="$(date +%s)"
-say "pg_dump -> $DUMP"
-if ! ( cd "$REPO" && docker compose exec -T db pg_dump -Fc -U vse -d volsurface ) > "$DUMP.part" 2> "$LOGDIR/pg_dump-$HORODATE.err"; then
-  rm -f "$DUMP.part"
-  echec "pg_dump a echoue (voir $LOGDIR/pg_dump-$HORODATE.err)"
-fi
-mv "$DUMP.part" "$DUMP"
-TAILLE_DUMP="$(stat -f%z "$DUMP")"
-say "dump ecrit : $((TAILLE_DUMP/1024)) Ko"
+FICHIERS=0
+TAILLE_DUMP=0
+MODE="complet"
+[ "$BRONZE_ONLY" = "1" ] && MODE="bronze"
 
-# --- 3. le dump est-il lisible ? un dump non verifie n'est pas un dump ---
-if ( cd "$REPO" && docker compose exec -T db pg_restore --list ) < "$DUMP" > /dev/null 2>&1; then
-  say "dump verifie (pg_restore --list ok)"
-else
-  mv "$DUMP" "$DUMP.invalide"
-  echec "dump illisible : renomme en $DUMP.invalide"
-fi
-
-# --- 4. bronze (incremental ; les .part en cours d'ecriture sont ignores) ---
+# --- 2. bronze d'abord : c'est lui qui grandit en continu, quelques Mo a copier par heure.
+#        Les .part en cours d'ecriture sont exclus : ils partiront une fois fermes, donc
+#        aucun fichier incomplet ne se retrouve sur la sauvegarde.
 say "rsync du bronze..."
 if rsync -a --exclude '*.part' --stats "$REPO/data/deribit/bronze/" "$DEST/bronze/" >> "$LOGDIR/rsync-$HORODATE.log" 2>&1; then
   FICHIERS="$(find "$DEST/bronze" -name '*.jsonl.zst' | wc -l | tr -d ' ')"
@@ -117,25 +118,69 @@ else
   echec "rsync du bronze a echoue (voir $LOGDIR/rsync-$HORODATE.log)"
 fi
 
-# --- 5. purge des vieux dumps ---
-PURGES="$(find "$DEST/db" -name 'volsurface-*.dump' -mtime "+$KEEP_DUMPS" -print -delete | wc -l | tr -d ' ')"
-[ "$PURGES" -gt 0 ] && say "purge : $PURGES dump(s) de plus de $KEEP_DUMPS jours"
+# --- 3. dump de la base : mode complet seulement ---
+if [ "$BRONZE_ONLY" = "1" ]; then
+  say "mode bronze seul : base non dumpee (le dump est quotidien, il n'apporte rien 24 fois par jour)"
+else
+  DUMP="$DEST/db/volsurface-$HORODATE.dump"
+  say "pg_dump -> $DUMP"
+  if ! ( cd "$REPO" && docker compose exec -T db pg_dump -Fc -U vse -d volsurface ) > "$DUMP.part" 2> "$LOGDIR/pg_dump-$HORODATE.err"; then
+    rm -f "$DUMP.part"
+    echec "pg_dump a echoue (voir $LOGDIR/pg_dump-$HORODATE.err)"
+  fi
+  mv "$DUMP.part" "$DUMP"
+  TAILLE_DUMP="$(stat -f%z "$DUMP")"
+  say "dump ecrit : $((TAILLE_DUMP/1024)) Ko"
+
+  # un dump non verifie n'est pas un dump
+  if ( cd "$REPO" && docker compose exec -T db pg_restore --list ) < "$DUMP" > /dev/null 2>&1; then
+    say "dump verifie (pg_restore --list ok)"
+  else
+    mv "$DUMP" "$DUMP.invalide"
+    echec "dump illisible : renomme en $DUMP.invalide"
+  fi
+
+  PURGES="$(find "$DEST/db" -name 'volsurface-*.dump' -mtime "+$KEEP_DUMPS" -print -delete | wc -l | tr -d ' ')"
+  [ "$PURGES" -gt 0 ] && say "purge : $PURGES dump(s) de plus de $KEEP_DUMPS jours"
+fi
 
 # --- 6. etat, pour le monitoring ---
 DUREE="$(( $(date +%s) - T0 ))"
-python3 - "$STATUS" "$DUREE" "$TAILLE_DUMP" "$FICHIERS" "$DEST" <<'PY'
-import json, sys, time
-duree, taille, fichiers, dest = int(sys.argv[2]), int(sys.argv[3]), int(sys.argv[4]), sys.argv[5]
-with open(sys.argv[1], "w") as f:
-    json.dump({
-        "ok": True,
-        "last_success_utc": time.time(),
-        "last_success_iso": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
-        "duration_s": duree,
-        "dump_bytes": taille,
-        "bronze_files": fichiers,
-        "destination": dest,
-    }, f, indent=2)
+python3 - "$STATUS" "$DUREE" "$TAILLE_DUMP" "$FICHIERS" "$DEST" "$MODE" <<'PY'
+import json, os, sys, time
+
+chemin, duree, taille_dump, fichiers, dest, mode = (sys.argv[1], int(sys.argv[2]),
+                                                    int(sys.argv[3]), int(sys.argv[4]),
+                                                    sys.argv[5], sys.argv[6])
+# l'etat est FUSIONNE : une passe horaire ne doit pas effacer la date du dernier dump
+etat = {}
+if os.path.exists(chemin):
+    try:
+        with open(chemin) as f:
+            etat = json.load(f)
+    except Exception:
+        etat = {}
+
+now = time.time()
+iso = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now))
+etat.update({
+    "ok": True,
+    "last_success_utc": now,
+    "last_success_iso": iso,
+    "last_mode": mode,
+    "duration_s": duree,
+    "bronze_files": fichiers,
+    "destination": dest,
+})
+if mode == "complet":
+    etat["last_full_dump_utc"] = now
+    etat["last_full_dump_iso"] = iso
+    etat["dump_bytes"] = taille_dump
+# le bronze est la copie horaire : c'est elle qui doit rester fraiche pour le monitoring
+etat["last_bronze_utc"] = now
+etat["last_bronze_iso"] = iso
+with open(chemin, "w") as f:
+    json.dump(etat, f, indent=2)
 PY
 say "--- sauvegarde terminee en ${DUREE}s ---"
 cat "$STATUS" >&2

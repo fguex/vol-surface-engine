@@ -183,6 +183,7 @@ chmod +x "$REPO_DIR/ops/mini-stack-guard.sh" "$REPO_DIR/ops/mini-backup.sh"
 CRON_TMP="$(mktemp)"
 crontab -l 2>/dev/null | grep -v -e mini-stack-guard -e mini-backup > "$CRON_TMP" || true
 printf '*/5 * * * * %s/ops/mini-stack-guard.sh\n' "$REPO_DIR" >> "$CRON_TMP"
+printf '5 * * * * %s/ops/mini-backup.sh --bronze-only\n' "$REPO_DIR" >> "$CRON_TMP"
 printf '30 2 * * * %s/ops/mini-backup.sh\n' "$REPO_DIR" >> "$CRON_TMP"
 crontab "$CRON_TMP"
 rm -f "$CRON_TMP"
