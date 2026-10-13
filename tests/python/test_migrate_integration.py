@@ -96,13 +96,38 @@ def test_idempotence(base_jetable, monkeypatch) -> None:
     assert _nombre_de_tables(base_jetable) == tables_avant
 
 
-def test_baseline_n_execute_pas_le_sql(base_jetable, monkeypatch) -> None:
-    """Sur une base creee avant les migrations : on enregistre 001 sans l'executer,
-    donc aucune table metier n'est creee."""
+def _table_existe(nom_base: str, table: str) -> bool:
+    with psycopg.connect(dbname=nom_base) as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT count(*) FROM information_schema.tables WHERE table_name=%s", (table,))
+            return cur.fetchone()[0] == 1
+
+
+def test_baseline_n_execute_pas_le_sql(base_jetable, monkeypatch, tmp_path) -> None:
+    """Sur une base creee avant les migrations : 001 est enregistree sans etre
+    executee, et la suite s'applique normalement."""
     monkeypatch.setenv("PGDATABASE", base_jetable)
+    dossier = tmp_path / "sql"
+    dossier.mkdir()
+    (dossier / "001_a.sql").write_text("CREATE TABLE t1 (x int);\n", encoding="utf-8")
+    (dossier / "002_b.sql").write_text("CREATE TABLE t2 (x int);\n", encoding="utf-8")
+    assert migrate_main(["--sql-dir", str(dossier), "--baseline-through", "001"]) == 0
+    assert _versions(base_jetable) == ["001", "002"]
+    assert not _table_existe(base_jetable, "t1"), "001 ne doit PAS etre executee (baseline)"
+    assert _table_existe(base_jetable, "t2"), "002 doit etre appliquee apres la baseline"
+
+
+def test_baseline_sur_une_base_deja_peuplee_ne_casse_rien(base_jetable, monkeypatch) -> None:
+    """Le scenario reel du Mac mini : les tables de 001 existent deja, on enregistre
+    la baseline, et le runner ne doit PAS tenter de rejouer 001 (double creation)."""
+    monkeypatch.setenv("PGDATABASE", base_jetable)
+    with psycopg.connect(dbname=base_jetable) as conn:
+        with conn.cursor() as cur:
+            cur.execute("CREATE TABLE snapshot (x int)")   # simule la base existante
     assert migrate_main(["--sql-dir", str(SQL_DIR), "--baseline-through", "001"]) == 0
-    assert _versions(base_jetable) == ["001"]
-    assert _nombre_de_tables(base_jetable) == 1  # seulement schema_migrations
+    assert _versions(base_jetable) == ["001", "002"]
+    # et un second passage doit etre totalement inerte
+    assert migrate_main(["--sql-dir", str(SQL_DIR)]) == 0
 
 
 def test_migration_modifiee_bloque_tout(base_jetable, monkeypatch, tmp_path) -> None:

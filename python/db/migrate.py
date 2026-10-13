@@ -169,6 +169,7 @@ def apply_one(conn, m: Migration) -> int:
             dur = int((time.perf_counter() - t0) * 1000)
             record(conn, m, dur)
     else:
+        conn.commit()                       # fermer toute transaction ouverte avant de basculer
         conn.autocommit = True              # CREATE INDEX CONCURRENTLY, etc.
         try:
             _executer_fichier(conn, m.sql)
@@ -225,13 +226,13 @@ def main(argv: list[str] | None = None) -> int:
             return 3
 
         cible = args.target or "999999"
-        a_faire = [m for m in migrations if m.version not in applied and m.version <= cible]
 
-        # 2. Baseline : base existante, on enregistre sans executer.
+        # 2. Baseline D'ABORD : sur une base existante, on enregistre les migrations
+        #    deja appliquees a la main SANS les executer. Il faut ensuite recalculer
+        #    ce qui reste a faire, sinon le runner tenterait de rejouer la baseline.
         if args.baseline_through:
             limite = args.baseline_through
-            deja = [m for m in migrations if m.version <= limite]
-            a_marquer = [m for m in deja if m.version not in applied]
+            a_marquer = [m for m in migrations if m.version <= limite and m.version not in applied]
             if not a_marquer:
                 print(f"baseline : rien a enregistrer jusqu'a {limite}")
             for m in a_marquer:
@@ -239,6 +240,11 @@ def main(argv: list[str] | None = None) -> int:
                     record(conn, m, 0, note="baseline (appliquee avant l'introduction des migrations)")
                 print(f"  baseline {m.version} {m.name}")
             conn.commit()
+            applied = applied_rows(conn)          # recalcul indispensable
+            if a_marquer and not (args.dry_run or args.status):
+                print("  (baseline enregistree : ces versions ne seront pas executees)")
+
+        a_faire = [m for m in migrations if m.version not in applied and m.version <= cible]
 
         if not a_faire:
             print(f"a jour : {len(applied)} migration(s) appliquee(s), rien a faire")
