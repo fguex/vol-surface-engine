@@ -36,6 +36,32 @@ migrations déjà appliquées à la main, sans les exécuter.
 
 Codes de sortie : `0` ok, `1` erreur, `2` usage, `3` migration modifiée après application.
 
+## Piège : modifier le collecteur exige un rebuild
+
+  Le service `collector` exécute le code **embarqué dans l'image** (le montage `./python` est sur
+  `ingest` seulement). Après une modification de `python/collect/` ou de la commande dans
+  `compose.yaml`, un simple `docker compose up -d collector` recrée le conteneur avec l'ancien
+  code : si la commande a gagné une option, le conteneur part en boucle de redémarrage sur
+  `unrecognized arguments` (vécu). Il faut :
+
+```
+docker compose build collector && docker compose up -d collector
+```
+
+  Vérifier ensuite trois choses : `docker compose ps` (healthy), `data/deribit/health.json`
+  (`subscribed: true`, `n_ticker` attendu) et la ligne `connected` du dernier événement, qui
+  porte `n_channels`, `n_ticker` et les spots utilisés pour la bande ATM.
+
+## Canaux souscrits
+
+  `quote.*` sur tout l'univers (meilleur bid/ask), plus, par devise : `trades.option.*.100ms`,
+  `deribit_price_index`, `markprice.options` (mark_iv et mark_price par strike, toute la chaîne),
+  `deribit_volatility_index` (DVOL), `estimated_expiration_price`, `deribit_price_ranking`,
+  `ticker.{DEVISE}-PERPETUAL.100ms` (funding, open interest, base), `perpetual.*`, les trades du
+  perpétuel et `block_trades`. Et `ticker.{instrument}.100ms` sur une bande ATM
+  (`--ticker-subset N` instruments par devise, recalculée à chaque session) : c'est le seul canal
+  qui porte les greeks, l'open interest et bid/ask IV.
+
 ## Tâches planifiées (cron)
 
 Deux entrées, toutes deux pointant sur le **repo** (pas sur une copie dans `~/bin`) :
