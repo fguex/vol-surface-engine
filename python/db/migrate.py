@@ -143,20 +143,35 @@ def record(conn, m: Migration, duration_ms: int, note: str | None = None) -> Non
         )
 
 
+def _executer_fichier(conn, sql: str) -> None:
+    """Execute un fichier SQL entier.
+
+    psycopg3 refuse plusieurs ordres par `execute()` avec son protocole etendu, et
+    en psycopg3 le `cursor_factory` se pose sur la CONNEXION (le parametre par
+    curseur de psycopg2 n'existe plus). On bascule donc la connexion en ClientCursor
+    (protocole simple, cote libpq) le temps du fichier, puis on restaure.
+    """
+    precedente = conn.cursor_factory
+    conn.cursor_factory = ClientCursor
+    try:
+        with conn.cursor() as cur:
+            cur.execute(sql)
+    finally:
+        conn.cursor_factory = precedente
+
+
 def apply_one(conn, m: Migration) -> int:
     """Execute une migration et enregistre son application. Retourne la duree en ms."""
     t0 = time.perf_counter()
     if m.transactional:
         with conn.transaction():
-            with conn.cursor(cursor_factory=ClientCursor) as cur:
-                cur.execute(m.sql)          # ClientCursor : plusieurs ordres par fichier
+            _executer_fichier(conn, m.sql)
             dur = int((time.perf_counter() - t0) * 1000)
             record(conn, m, dur)
     else:
         conn.autocommit = True              # CREATE INDEX CONCURRENTLY, etc.
         try:
-            with conn.cursor(cursor_factory=ClientCursor) as cur:
-                cur.execute(m.sql)
+            _executer_fichier(conn, m.sql)
             dur = int((time.perf_counter() - t0) * 1000)
             record(conn, m, dur)
         finally:
