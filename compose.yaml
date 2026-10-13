@@ -12,7 +12,12 @@ services:
       - "127.0.0.1:5432:5432"
     volumes:
       - pgdata:/var/lib/postgresql/data
-      - ./sql:/docker-entrypoint-initdb.d:ro
+      # Les migrations ne sont PAS montees dans /docker-entrypoint-initdb.d : cet
+      # entrypoint ne se declenche qu'a la premiere initialisation du volume, donc
+      # jamais sur une base existante et sans aucune trace de ce qui a ete applique.
+      # Elles sont montees en lecture pour inspection, et appliquees explicitement
+      # par `python -m python.db.migrate`, qui tient la table schema_migrations.
+      - ./sql:/migrations:ro
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U vse -d volsurface"]
       interval: 5s
