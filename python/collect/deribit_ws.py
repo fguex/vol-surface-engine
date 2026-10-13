@@ -13,6 +13,9 @@ Principes
 
 from __future__ import annotations
 
+from collections import defaultdict
+from datetime import date
+
 import argparse
 import asyncio
 import json
@@ -51,11 +54,104 @@ def list_option_instruments(currency: str) -> list[str]:
         return sorted(x["instrument_name"] for x in json.load(r)["result"])
 
 
-def channels_for(instruments: list[str]) -> list[str]:
+MONTHS = {m: i for i, m in enumerate(
+    "JAN FEB MAR APR MAY JUN JUL AUG SEP OCT NOV DEC".split(), start=1)}
+
+
+def parse_option_name(name: str) -> tuple[date, float, bool] | None:
+    """BTC-24SEP27-104000-P -> (2027-09-24, 104000.0, False). None si non parsable.
+
+    Mois resolus par table et non par strptime : %b depend de la locale du process,
+    et une locale non anglaise ferait echouer la selection ATM en silence.
+    """
+    parts = name.split("-")
+    if len(parts) != 4 or parts[3] not in ("C", "P"):
+        return None
+    jour_mois = parts[1]
+    try:
+        jour, mois, annee = int(jour_mois[:-5]), MONTHS[jour_mois[-5:-2]], int(jour_mois[-2:])
+        strike = float(parts[2])
+        return date(2000 + annee, mois, jour), strike, parts[3] == "C"
+    except (KeyError, ValueError):
+        return None
+
+
+def index_price(currency: str) -> float | None:
+    """Prix d'indice du perpetuel : sert de repere ATM."""
+    url = f"{REST_URL}/public/ticker?instrument_name={currency}-PERPETUAL"
+    try:
+        with urllib.request.urlopen(url, timeout=10) as r:
+            return float(json.load(r)["result"]["index_price"])
+    except (OSError, KeyError, ValueError, json.JSONDecodeError) as exc:
+        log.warning("index_price(%s) indisponible: %s", currency, exc)
+        return None
+
+
+def select_ticker_subset(instruments: list[str], spots: dict[str, float],
+                         n: int, expiries: int = 5) -> list[str]:
+    """n instruments par devise pour le canal ticker.{instrument} (le seul qui porte
+    les greeks, l'open interest et bid/ask IV).
+
+    Le canal ticker coute ~1 msg/s et ~770 octets par instrument : le prendre sur
+    toute la chaine ferait ~60 Go/jour. On prend donc une bande ATM : les `expiries`
+    echeances les plus proches, et autour du spot moitie calls / moitie puts.
+    """
+    if n <= 0:
+        return []
+    # trois niveaux : devise -> echeance -> strike -> cote. Chaque niveau doit
+    # s'auto-creer, sinon un strike absent leve KeyError (les strikes options ne
+    # tombent pas sur des valeurs rondes pour ETH).
+    par_devise: dict[str, dict] = defaultdict(lambda: defaultdict(lambda: defaultdict(dict)))
+    for name in instruments:
+        info = parse_option_name(name)
+        if info is None:
+            continue
+        exp, strike, is_call = info
+        par_devise[name.split("-")[0]][exp][strike]["C" if is_call else "P"] = name
+
+    choisis: list[str] = []
+    par_echeance = max(2, n // expiries)
+    strikes_vises = max(1, par_echeance // 2)
+    for devise, echeances in par_devise.items():
+        spot = spots.get(devise)
+        if not spot:
+            continue
+        for exp in sorted(echeances)[:expiries]:
+            strikes = echeances[exp]
+            proches = sorted(strikes, key=lambda s: abs(s - spot))[:strikes_vises]
+            for s in proches:
+                for side in ("C", "P"):
+                    if side in strikes[s]:
+                        choisis.append(strikes[s][side])
+    return choisis
+
+
+def channels_for(instruments: list[str], ticker_instruments: list[str] = ()) -> list[str]:
+    """Canaux a souscrire.
+
+    quote.* = meilleur bid/ask (98 % du volume, la microstructure).
+    Les canaux par devise ajoutent ce qui manquait : mark_iv et mark_price par strike
+    pour TOUTE la chaine (markprice.options, ~1 msg/s par devise), DVOL, le perpetuel
+    (funding, open interest, base), la reference de settlement, la composition de
+    l'indice, et les prints de bloc. Cout total : ~10 msg/s.
+    ticker.* uniquement sur la bande ATM : greeks + open interest + bid/ask IV.
+    """
     chans = [f"quote.{n}" for n in instruments]
     for cur in CURRENCIES:
-        chans.append(f"trades.option.{cur}.100ms")
-        chans.append(f"deribit_price_index.{cur.lower()}_usd")
+        low = cur.lower()
+        chans += [
+            f"trades.option.{cur}.100ms",
+            f"deribit_price_index.{low}_usd",
+            f"markprice.options.{low}_usd",           # iv + mark_price, toute la chaine
+            f"deribit_volatility_index.{low}_usd",    # DVOL
+            f"estimated_expiration_price.{low}_usd",  # reference de settlement
+            f"deribit_price_ranking.{low}_usd",       # composition de l'indice
+            f"ticker.{cur}-PERPETUAL.100ms",          # funding, OI, base
+            f"perpetual.{cur}-PERPETUAL",
+            f"trades.{cur}-PERPETUAL.100ms",
+            f"block_trades.{cur}",
+        ]
+    chans += [f"ticker.{n}.100ms" for n in ticker_instruments]
     return chans
 
 
@@ -196,7 +292,9 @@ class Stats:
 
 class Collector:
     def __init__(self, out: Path, rotate_s: int, chaos_at: float | None,
-                 stale_s: float = STALE_S):
+                 stale_s: float = STALE_S, ticker_subset: int = 0):
+        self.ticker_subset = ticker_subset
+        self.ticker_channels = 0
         self.out = out
         self.queue: asyncio.Queue = asyncio.Queue(maxsize=QUEUE_MAX)
         self.writer = BronzeWriter(out / "bronze", rotate_s)
@@ -218,7 +316,16 @@ class Collector:
     # -- lecteur -----------------------------------------------------------
     async def _session(self) -> None:
         self.instruments = [i for c in CURRENCIES for i in list_option_instruments(c)]
-        chans = channels_for(self.instruments)
+        # La bande ATM est recalculee a chaque session : le spot bouge, et les
+        # echeances expirent. Une session dure des heures a des jours.
+        spots: dict[str, float] = {}
+        for cur in CURRENCIES:
+            prix = await asyncio.to_thread(index_price, cur)
+            if prix:
+                spots[cur] = prix
+        ticker_instr = select_ticker_subset(self.instruments, spots, self.ticker_subset)
+        self.ticker_channels = len(ticker_instr)
+        chans = channels_for(self.instruments, ticker_instr)
         # max_queue : le buffer par defaut (16 trames) deborde pendant la rafale
         # initiale (1 snapshot par canal) -> Deribit coupe avec "connection too slow".
         # open_timeout : sans lui un connect() qui traine bloque le lecteur
@@ -229,7 +336,8 @@ class Collector:
                                           open_timeout=OPEN_TIMEOUT_S,
                                           close_timeout=CONNECT_CLOSE_TIMEOUT_S) as ws:
                 self._ws = ws
-                self.event("connected", n_instruments=len(self.instruments), n_channels=len(chans))
+                self.event("connected", n_instruments=len(self.instruments), n_channels=len(chans),
+                           n_ticker=self.ticker_channels, spots=spots)
                 await ws.send(json.dumps({"jsonrpc": "2.0", "id": 1, "method": "public/set_heartbeat",
                                           "params": {"interval": HEARTBEAT_S}}))
                 pending = {}
@@ -383,7 +491,8 @@ class Collector:
                 "stale_events": self.stats.stale_events,
                 "msgs": self.stats.msgs, "dropped": self.stats.dropped,
                 "reconnects": self.stats.reconnects, "queue": self.queue.qsize(),
-                "n_instruments": len(self.instruments)}))
+                "n_instruments": len(self.instruments),
+                "n_ticker": self.ticker_channels}))
             os.replace(tmp, path)
             await asyncio.sleep(every_s)
 
@@ -433,9 +542,14 @@ def main() -> None:
     p.add_argument("--chaos-at", type=float, default=None, help="couper la connexion apres N s")
     p.add_argument("--stale-timeout", type=float, default=STALE_S,
                    help="secondes sans donnee abonnee avant reconnexion forcee")
+    p.add_argument("--ticker-subset", type=int, default=20,
+                   help="instruments par devise pour le canal ticker (greeks, open interest, "
+                        "bid/ask IV). 0 = desactive. ~1 msg/s et ~770 octets par instrument : "
+                        "20 par devise coute ~2,8 Go/jour brut, toute la chaine en couterait 60.")
     a = p.parse_args()
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
-    asyncio.run(Collector(a.out, a.rotate, a.chaos_at, a.stale_timeout).run(a.duration))
+    asyncio.run(Collector(a.out, a.rotate, a.chaos_at, a.stale_timeout,
+                          a.ticker_subset).run(a.duration))
 
 
 if __name__ == "__main__":

@@ -52,8 +52,12 @@ services:
       DATA_DIR: /app/data
     volumes:
       - ./data:/app/data
+    # --ticker-subset : instruments par devise sur le canal ticker, le seul qui porte
+    # les greeks, l'open interest et le bid/ask IV. 20 pese ~2,8 Go/jour brut ; toute
+    # la chaine en peserait ~60.
     command: ["python", "-m", "python.collect.deribit_ws",
-              "--duration", "0", "--rotate", "3600", "--out", "/app/data/deribit"]
+              "--duration", "0", "--rotate", "3600", "--out", "/app/data/deribit",
+              "--ticker-subset", "20"]
     stop_grace_period: 30s        # laisse l'ecrivain fermer le fichier .part proprement
     healthcheck:
       # unhealthy si aucun message depuis 120 s
