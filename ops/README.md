@@ -36,6 +36,70 @@ migrations déjà appliquées à la main, sans les exécuter.
 
 Codes de sortie : `0` ok, `1` erreur, `2` usage, `3` migration modifiée après application.
 
+## Tâches planifiées (cron)
+
+Deux entrées, toutes deux pointant sur le **repo** (pas sur une copie dans `~/bin`) :
+un `git pull` met donc à jour le comportement, et deux copies ne peuvent pas diverger.
+
+```
+*/5 * * * *  ~/vol-surface-engine/ops/mini-stack-guard.sh   # remet Colima + la stack en route
+30  2 * * *  ~/vol-surface-engine/ops/mini-backup.sh        # sauvegarde vers le disque externe
+```
+
+Rien à voir dans la sortie : les deux scripts sont silencieux quand tout va bien. Leurs
+traces sont dans `~/stack-guard.log` et `~/backup.log`.
+
+## Sauvegarde vers le disque externe
+
+Disque : WD 5 To, partition APFS `Element1_APFS` (3,5 To libres), dossier `Quant DB/`.
+Le marqueur `/Volumes/Element1_APFS/.vse-backup-marker` porte l'UUID du volume.
+
+Contenu de `Quant DB/` :
+
+```
+db/       volsurface-YYYY-MM-DD.dump   pg_dump -Fc, vérifié par pg_restore --list, 14 jours gardés
+bronze/   copie du bronze Deribit     rsync incrémental, les *.part en cours sont ignorés
+logs/     sorties de pg_dump et rsync, pour diagnostiquer sans deviner
+```
+
+### Les garde-fous, et le piège qu'ils couvrent
+
+Si le disque n'est pas monté, `/Volumes/Element1_APFS` existe quand même : c'est un dossier
+vide sur le disque **interne**. `rsync` y écrirait « avec succès » et on croirait avoir une
+sauvegarde. Le script refuse de tourner si :
+
+1. le chemin n'est pas un point de montage réel (`df` ne renvoie pas `/Volumes/Element1_APFS`) ;
+2. le marqueur est absent ;
+3. l'UUID du volume monté ne correspond pas à celui du marqueur (protège contre un autre
+   disque branché au même point de montage — même modèle, même nom) ;
+4. il reste moins de 20 Go libres, ou moins de 1,2 × la taille à copier.
+
+En cas d'échec il écrit `~/backup_status.json` avec `ok: false` et la raison, et sort en
+code 1. Un disque débranché est donc un cas normal et visible, pas un plantage silencieux.
+
+### Restaurer — un backup jamais restauré n'est pas un backup
+
+```bash
+cd ~/vol-surface-engine
+set -a; . ./.env; set +a
+export PGHOST=127.0.0.1 PGUSER=vse PGPASSWORD="$POSTGRES_PASSWORD"
+docker compose exec -T db psql -U vse -d volsurface -c 'CREATE DATABASE restore_test'
+docker compose exec -T db pg_restore -U vse -d restore_test --no-owner < "/Volumes/Element1_APFS/Quant DB/db/volsurface-YYYY-MM-DD.dump"
+docker compose exec -T db psql -U vse -d restore_test -tAc 'select count(*) from quote_curated'
+docker compose exec -T db psql -U vse -d volsurface -c 'DROP DATABASE restore_test'
+```
+
+Testé pour de vrai le 13 oct. : restauration du dump dans une base vide puis comparaison des
+comptes avec la production.
+
+### Sauvegarder hors machine (3-2-1)
+
+Le disque externe reste branché au mini : un vol, un incendie ou une panne d'alimentation
+emporte les deux copies. La troisième copie se fait depuis le MacBook, qui tire les dumps et
+le bronze par SSH (`rsync`), à cadence hebdomadaire. À mettre en place quand le MacBook est
+joignable de façon fiable.
+
+
 ## Redémarrage automatique de la stack (Colima → Docker → conteneurs)
 
 Le problème, mesuré le 11 oct. 2026 : après un reboot, Colima ne revient pas tout seul.

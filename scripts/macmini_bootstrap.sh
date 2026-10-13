@@ -176,17 +176,33 @@ else
   echo "  ATTENTION: db pas healthy -> docker compose logs --tail 50 db"
 fi
 
-step "7. Garde-fou de demarrage (cron, sans session graphique ni sudo)"
-mkdir -p "$HOME/bin"
-cp "$REPO_DIR/ops/mini-stack-guard.sh" "$HOME/bin/mini-stack-guard.sh"
-chmod +x "$HOME/bin/mini-stack-guard.sh"
+step "7. Taches planifiees (cron, sans session graphique ni sudo)"
+# Les scripts cron pointent sur le REPO, pas sur une copie dans ~/bin : un git pull
+# met donc a jour le comportement, et deux copies ne peuvent pas diverger.
+chmod +x "$REPO_DIR/ops/mini-stack-guard.sh" "$REPO_DIR/ops/mini-backup.sh"
 CRON_TMP="$(mktemp)"
-crontab -l 2>/dev/null | grep -v mini-stack-guard > "$CRON_TMP" || true
-printf '*/5 * * * * %s/bin/mini-stack-guard.sh\n' "$HOME" >> "$CRON_TMP"
+crontab -l 2>/dev/null | grep -v -e mini-stack-guard -e mini-backup > "$CRON_TMP" || true
+printf '*/5 * * * * %s/ops/mini-stack-guard.sh\n' "$REPO_DIR" >> "$CRON_TMP"
+printf '30 2 * * * %s/ops/mini-backup.sh\n' "$REPO_DIR" >> "$CRON_TMP"
 crontab "$CRON_TMP"
 rm -f "$CRON_TMP"
-echo "  crontab : $(crontab -l | grep mini-stack-guard)"
-echo "  test : colima stop ; sleep 300 ; colima status   (doit revenir tout seul)"
+echo "  crontab :"; crontab -l | sed 's/^/    /'
+echo "  test garde-fou : colima stop ; sleep 300 ; colima status"
+echo "  test sauvegarde : $REPO_DIR/ops/mini-backup.sh"
+
+step "8. Sauvegarde externe (si le disque est monte)"
+if [ -d /Volumes/Element1_APFS ]; then
+  if [ ! -f /Volumes/Element1_APFS/.vse-backup-marker ]; then
+    UUID="$(diskutil info /Volumes/Element1_APFS 2>/dev/null | awk -F': *' '/Volume UUID/{print $2}' | head -1)"
+    printf 'VSE_BACKUP_1\nvolume_uuid: %s\ncreated_utc: %s\npurpose: sauvegardes vol-surface-engine (pg_dump + bronze Deribit)\n' \
+      "$UUID" "$(date -u '+%Y-%m-%dT%H:%M:%SZ')" > /Volumes/Element1_APFS/.vse-backup-marker
+    echo "  marqueur cree (uuid $UUID)"
+  fi
+  "$REPO_DIR/ops/mini-backup.sh" || echo "  ATTENTION: la sauvegarde a echoue (voir ~/backup.log)"
+else
+  echo "  disque externe non monte : brancher /Volumes/Element1_APFS puis relancer"
+  echo "    $REPO_DIR/ops/mini-backup.sh"
+fi
 
 step "Termine"
 cat <<EOF
