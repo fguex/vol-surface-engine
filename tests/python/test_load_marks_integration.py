@@ -17,9 +17,11 @@ present fait echouer l'insertion) et laisse des traces en cas d'echec.
 from __future__ import annotations
 
 import datetime as dt
+import os
 import uuid
 from pathlib import Path
 
+import psycopg
 import pytest
 
 from python.collect.names import instrument_meta
@@ -47,6 +49,10 @@ pytestmark = pytest.mark.skipif(not _base_joignable(), reason="pas de base joign
 def base_jetable(monkeypatch):
     """Base neuve avec toutes les migrations appliquees, detruite a la fin."""
     nom = f"load_test_{uuid.uuid4().hex[:12]}"
+    # La base d'origine est retenue : au demontage, PGDATABASE pointe encore sur la
+    # base jetable (monkeypatch ne se defait qu'apres), et on ne peut pas supprimer
+    # la base sur laquelle on est connecte.
+    origine = os.environ.get("PGDATABASE", "postgres")
     with connection.connect() as conn:
         conn.autocommit = True
         with conn.cursor() as cur:
@@ -54,7 +60,7 @@ def base_jetable(monkeypatch):
     monkeypatch.setenv("PGDATABASE", nom)
     assert migrate_main(["--sql-dir", str(SQL_DIR)]) == 0
     yield nom
-    with connection.connect() as conn:
+    with psycopg.connect(dbname=origine) as conn:
         conn.autocommit = True
         with conn.cursor() as cur:
             cur.execute(f'DROP DATABASE IF EXISTS "{nom}" WITH (FORCE)')
