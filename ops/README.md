@@ -90,11 +90,22 @@ Deux entrées, toutes deux pointant sur le **repo** (pas sur une copie dans `~/b
 un `git pull` met donc à jour le comportement, et deux copies ne peuvent pas diverger.
 
 ```
-*/5 * * * *  ~/vol-surface-engine/ops/mini-stack-guard.sh              # remet Colima + la stack en route
-2-59/5 * * *  ~/vol-surface-engine/ops/mini-load-marks.sh              # bronze -> base (tranches de 5 min)
- 5  * * * *  ~/vol-surface-engine/ops/mini-backup.sh --bronze-only     # bronze -> disque externe (horaire)
-30  2 * * *  ~/vol-surface-engine/ops/mini-backup.sh                   # bronze + dump de la base (quotidien)
+*/5 * * * *   ~/vol-surface-engine/ops/mini-stack-guard.sh                # remet Colima + la stack en route
+2-59/5 * * *  ~/vol-surface-engine/ops/mini-load-marks.sh                # bronze -> base (tranches de 5 min)
+ 5  * * * *   ~/vol-surface-engine/ops/mini-backup-launch.sh --bronze-only  # bronze -> disque externe (horaire)
+30  2 * * *   ~/vol-surface-engine/ops/mini-backup-launch.sh             # bronze + dump de la base (quotidien)
 ```
+
+**Pourquoi la sauvegarde passe par `mini-backup-launch.sh`** (et pas directement par
+`mini-backup.sh`) : un processus lance par cron n'a pas l'autorisation macOS d'ecrire sur un
+volume amovible, et ce mini n'a pas de session graphique pour la lui accorder. Le resultat,
+vecu : un rsync qui echoue en une seconde, cinq heures de suite, avec un message d'erreur
+ecrit... sur le volume injoignable. Le lanceur passe par `ssh localhost`, dont le processus
+a l'autorisation. Alternative plus propre si un jour l'acces est accorde a cron :
+`Reglages > Confidentialite et securite > Acces complet au disque`, ajouter `/usr/sbin/cron`.
+
+`mini-backup.sh` verifie desormais l'ECRITURE avant de commencer : volume monte et marqueur
+present ne suffisent pas, un volume peut etre en lecture seule ou inaccessible.
 
 `mini-load-marks.sh` echantillonne le bronze vers la base (voir plus bas) ; il tourne a `:02, :07, ...`
 pour ne pas tomber en meme temps que la copie du bronze a `:05`. Chaque passage ecrit dans

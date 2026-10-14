@@ -184,8 +184,9 @@ CRON_TMP="$(mktemp)"
 crontab -l 2>/dev/null | grep -v -e mini-stack-guard -e mini-backup > "$CRON_TMP" || true
 printf '*/5 * * * * %s/ops/mini-stack-guard.sh\n' "$REPO_DIR" >> "$CRON_TMP"
 printf '2-59/5 * * * * %s/ops/mini-load-marks.sh\n' "$REPO_DIR" >> "$CRON_TMP"
-printf '5 * * * * %s/ops/mini-backup.sh --bronze-only\n' "$REPO_DIR" >> "$CRON_TMP"
-printf '30 2 * * * %s/ops/mini-backup.sh\n' "$REPO_DIR" >> "$CRON_TMP"
+# La sauvegarde passe par ssh localhost : voir ops/mini-backup-launch.sh
+printf '5 * * * * %s/ops/mini-backup-launch.sh --bronze-only\n' "$REPO_DIR" >> "$CRON_TMP"
+printf '30 2 * * * %s/ops/mini-backup-launch.sh\n' "$REPO_DIR" >> "$CRON_TMP"
 crontab "$CRON_TMP"
 rm -f "$CRON_TMP"
 echo "  crontab :"; crontab -l | sed 's/^/    /'
