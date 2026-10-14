@@ -36,6 +36,26 @@ migrations déjà appliquées à la main, sans les exécuter.
 
 Codes de sortie : `0` ok, `1` erreur, `2` usage, `3` migration modifiée après application.
 
+## Les couches : bronze / silver / gold
+
+Le schema ne dit plus seulement « une base » mais **quelle** couche : `silver` porte les
+tables de travail, `gold` les vues de lecture, `bronze` est un repere (les donnees brutes
+sont des fichiers, pas des tables). Voir `sql/008_couches.sql`.
+
+    silver   instrument (SCD2), option_mark, perp_tick, vol_index     <- ecrit par load_marks
+    gold     v_spot, v_surface, v_atm_terme, v_perp_funding           <- lu par les clients
+    public   schema_migrations                                        <- le registre du migrateur
+
+Le role recoit `search_path = silver, gold, public` au niveau de la **base**, donc les
+requetes a la main et les scripts d'exploitation continuent de fonctionner sans prefixe
+(`ops/db-tour.sh` en depend, volontairement, et le dit).
+
+**Piege operationnel : `pg_dump` ne transporte pas ce reglage.** Les `ALTER DATABASE ... SET`
+ne font pas partie d'un dump : une base restauree n'a donc PAS ce search_path, et une
+requete non qualifiee y echoue. C'est pourquoi `ops/restore-dump.sh` qualifie ses noms
+(`silver.option_mark`, `public.schema_migrations`) — sans quoi la verification de sauvegarde
+casserait précisément le jour ou l'on en a besoin.
+
 ## Piège : modifier le collecteur exige un rebuild
 
   Le service `collector` exécute le code **embarqué dans l'image** (aucun montage de `./python`).

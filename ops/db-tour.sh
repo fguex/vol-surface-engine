@@ -6,6 +6,9 @@
 #
 # Ne modifie rien : uniquement des SELECT. La base ne contient que Deribit
 # (BTC/ETH) ; le brut reste dans le bronze, sur disque.
+#
+# Les objets vivent dans les schemas silver (tables) et gold (vues) : les requetes
+# ci-dessous les nomment sans prefixe, ce que le search_path de la base resout.
 set -u
 export PATH="/opt/homebrew/bin:/usr/sbin:/usr/bin:/bin"
 cd "${REPO:-$HOME/vol-surface-engine}"
@@ -15,6 +18,15 @@ ESPOT()  { PSQL -tAc "SELECT round(p.index_price::numeric, 2) FROM perp_tick p
                         JOIN instrument i USING (instrument_sk)
                        WHERE i.instrument_name = '$1' ORDER BY p.observed_at DESC LIMIT 1" | tr -d '[:space:]'; }
 TITRE()  { printf '\n\033[1m%s\033[0m\n' "$*"; }
+
+TITRE "0. Les couches (bronze / silver / gold)"
+PSQL -c "
+SELECT n.nspname AS couche,
+       CASE c.relkind WHEN 'r' THEN 'table' ELSE 'vue' END AS type,
+       string_agg(c.relname, ', ' ORDER BY c.relname) AS objets
+  FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+ WHERE c.relkind IN ('r','v') AND n.nspname IN ('bronze','silver','gold','public')
+ GROUP BY n.nspname, c.relkind ORDER BY 1, 2;"
 
 TITRE "1. Vue d'ensemble"
 PSQL -c "

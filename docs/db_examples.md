@@ -272,3 +272,22 @@ passe par le script, qui lit les vues et écrit un PNG :
 Deux panneaux : le smile en k pour les premières échéances (ronds = puts, triangles = calls) et
 la structure par terme de la vol ATM. Options : `--sous-jacent ETH`, `--echeances 6`, `--dsn
 "postgresql://vse@127.0.0.1:5432/volsurface"`.
+
+
+## Ou vivent les objets
+
+Depuis la migration `sql/008_couches.sql`, la base porte elle-meme le decoupage par couches :
+
+    silver.instrument    dimension SCD2 (versions valides dans le temps)
+    silver.option_mark   faits : les marques d'options, par tranche de 5 min
+    silver.perp_tick     faits : funding, base, open interest
+    silver.vol_index     faits : DVOL BTC et ETH
+    gold.v_spot          le spot de reference (perpetuel)
+    gold.v_surface       la surface : k = ln(K/F), T en annees, IV en %
+    gold.v_atm_terme     la structure par terme ATM
+    gold.v_perp_funding  le funding annualise
+    public.schema_migrations   le registre du migrateur
+
+Dans DBeaver, ce sont deux dossiers de schemas. Tes requetes peuvent nommer les objets sans
+prefixe (le `search_path` de la base s'en charge), mais si tu ecris un script destine a
+durer, qualifie : `silver.option_mark`, `gold.v_surface`.
