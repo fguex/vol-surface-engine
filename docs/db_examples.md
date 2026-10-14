@@ -230,3 +230,45 @@ SELECT date_trunc('hour', observed_at) AS heure,
 5. **La dimension `instrument` est en SCD2** (`valid_from` / `valid_to`) : lire
    `WHERE valid_to IS NULL` pour les instruments vivants, ou joindre sans filtre
    pour retrouver un instrument expiré.
+
+
+## Les vues de lecture : explorer sans réécrire la même requête
+
+Trois requêtes reviennent tout le temps (l'état de la surface, la structure par terme, le
+funding). Elles vivent désormais dans la base (migrations `006` et `007`), pas dans un carnet :
+DBeaver, `psql` et les scripts Python lisent exactement la même chose.
+
+    v_spot          dernier état du perpétuel par sous-jacent — le spot de référence
+    v_surface       une ligne par option : k = ln(K/F), T en années, IV en %, greeks,
+                    et reference_du_k (quel prix a servi)
+    v_atm_terme     vol ATM par échéance (strike le plus proche du spot)
+    v_perp_funding  funding en points de base par 8 h et annualisé, base vs index
+
+Dans DBeaver, tu les trouves sous `public` → `Views`, et tu peux les trier/filtrer comme une
+table. Exemple : `v_surface` filtré sur `underlying = 'BTC'`, trié par `t_annees` puis `k_logm`,
+te donne la surface complète prête à lire.
+
+**Important — les colonnes `index_price` / `underlying_price` d'`option_mark` sont souvent NULL.**
+Le canal `ticker` de Deribit ne suit qu'une bande de strikes autour du spot : au-delà de quelques
+jours d'échéance, ces colonnes sont vides. C'est pour ça que les vues prennent le spot sur le
+perpétuel (`v_spot`), disponible en continu. Si tu écris ta propre requête, fais pareil — sinon un
+« strike le plus proche » retombe sur un strike arbitraire et produit un chiffre faux mais
+plausible (vécu : 92,9 % de vol ATM annoncés pour BTC décembre sur un strike à 30 000, marché à
+83 700).
+
+## Tracer un graphique
+
+DBeaver Community n'a pas de panneau graphique (c'est une fonction de la version PRO). Le tracé
+passe par le script, qui lit les vues et écrit un PNG :
+
+    # depuis le MacBook, tunnel ouvert
+    ssh -f -N -L 15432:127.0.0.1:5432 macmini-ai@macmini-ai.local
+    cd ~/vol-surface-engine
+    export PGHOST=127.0.0.1 PGPORT=15432 PGUSER=vse PGDATABASE=volsurface
+    export PGPASSWORD=$(ssh macmini-ai@macmini-ai.local \
+        'grep -m1 POSTGRES_PASSWORD ~/vol-surface-engine/.env | cut -d= -f2-')
+    ./.venv/bin/python scripts/plot_surface.py --out docs/figures/surface.png
+
+Deux panneaux : le smile en k pour les premières échéances (ronds = puts, triangles = calls) et
+la structure par terme de la vol ATM. Options : `--sous-jacent ETH`, `--echeances 6`, `--dsn
+"postgresql://vse@127.0.0.1:5432/volsurface"`.
