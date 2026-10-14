@@ -104,9 +104,9 @@ SELECT max(observed_at) < date_trunc('hour', now())
 ```
 
   Le retard est donc borne par (largeur d'une tranche + cadence du cron), soit ~10 minutes. Pour
-  descendre plus bas, ce n'est pas le code qu'il faut changer mais la ligne de cron :`* * * * *`
-  au lieu de `2-59/5`. En dessous de 5 minutes, seuls les preiers instants d'une tranche se
-  gagnent — le grain de la base reste la tranche.
+  descendre plus bas, ce n'est pas le code qu'il faut changer mais la ligne de cron :
+  `* * * * *` au lieu de `2-59/5`. En dessous de 5 minutes, seuls les premiers instants d'une
+  tranche se gagnent — le grain de la base reste la tranche.
 
 ## Canaux souscrits
 
