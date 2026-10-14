@@ -90,18 +90,15 @@ def test_installation_complete_sur_base_neuve(base_jetable, monkeypatch) -> None
     monkeypatch.setenv("PGDATABASE", base_jetable)
     assert migrate_main(["--sql-dir", str(SQL_DIR)]) == 0
     assert _versions(base_jetable) == _migrations_du_repo()
-    # Les tables du travail courant : dimension + trois faits + le registre des
-    # migrations. Figees explicitement, pas un « au moins N tables » : le 6+1 du
-    # schema CBOE d'origine n'est plus vrai depuis que 004 l'a retire, et un
-    # seuil laxiste met des semaines a le dire.
+    # Le registre du migrateur est le SEUL objet hors couches qui doive rester dans public :
+    # il doit avoir un emplacement fixe, independant du search_path. Les tables de travail et
+    # les vues sont verifiees, couche par couche, par test_les_couches_sont_a_leur_place.
     with psycopg.connect(dbname=base_jetable) as conn:
         with conn.cursor() as cur:
             cur.execute("""SELECT table_name FROM information_schema.tables
                             WHERE table_schema = 'public' AND table_type = 'BASE TABLE'
                             ORDER BY 1""")
-            tables = {r[0] for r in cur.fetchall()}
-    assert tables == {"instrument", "option_mark", "perp_tick", "vol_index",
-                      "schema_migrations"}, tables
+            assert {r[0] for r in cur.fetchall()} == {"schema_migrations"}
 
 
 def test_btree_gist_installe(base_jetable, monkeypatch) -> None:

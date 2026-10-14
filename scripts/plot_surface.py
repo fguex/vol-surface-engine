@@ -98,8 +98,8 @@ def main() -> int:
         if ligne["expiry"] not in [e[0] for e in echeances]:
             echeances.append((ligne["expiry"], ligne["t_annees"]))
     for i, (expiry, t) in enumerate(echeances):
-        pts = [(l["k_logm"], l["iv_pct"], l["option_type"])
-               for l in lignes_smile if l["expiry"] == expiry]
+        pts = [(ligne["k_logm"], ligne["iv_pct"], ligne["option_type"])
+               for ligne in lignes_smile if ligne["expiry"] == expiry]
         couleurs = COULEURS[i % len(COULEURS)]
         ax1.plot([x for x, _y, _o in pts], [y for _x, y, _o in pts], "-",
                  color=couleurs, lw=1.2, alpha=0.85,
@@ -116,9 +116,9 @@ def main() -> int:
     ax1.legend(fontsize=8)
 
     # --- structure par terme -------------------------------------------------
-    for i, devise in enumerate(sorted({l["underlying"] for l in lignes_terme})):
-        pts = sorted([(float(l["t_annees"]), l["iv_atm_pct"])
-                      for l in lignes_terme if l["underlying"] == devise])
+    for i, devise in enumerate(sorted({ligne["underlying"] for ligne in lignes_terme})):
+        pts = sorted([(float(ligne["t_annees"]), ligne["iv_atm_pct"])
+                      for ligne in lignes_terme if ligne["underlying"] == devise])
         if not pts:
             continue
         ax2.plot([x for x, _y in pts], [y for _x, y in pts], "-o",
