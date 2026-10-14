@@ -320,6 +320,9 @@ def inserer(conn, table: str, cols: tuple, rows: list) -> int:
     tmp = f"tmp_load_{table}"
     colonnes = ", ".join(cols)
     with conn.cursor() as cur:
+        # DROP d'abord : un deuxieme chargement dans la MEME transaction (rejeu,
+        # test) viserait la meme table, qui n'est liberee qu'au commit.
+        cur.execute(f"DROP TABLE IF EXISTS {tmp}")
         cur.execute(f"CREATE TEMP TABLE {tmp} (LIKE {table}) ON COMMIT DROP")
         with cur.copy(f"COPY {tmp} ({colonnes}) FROM STDIN") as cp:
             for row in rows:

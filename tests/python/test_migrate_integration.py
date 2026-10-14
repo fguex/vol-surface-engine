@@ -133,6 +133,10 @@ def test_baseline_sur_une_base_deja_peuplee_ne_casse_rien(base_jetable, monkeypa
     monkeypatch.setenv("PGDATABASE", base_jetable)
     with psycopg.connect(dbname=base_jetable) as conn:
         with conn.cursor() as cur:
+            # Une base qui a deja les tables de 001 a aussi ses extensions : c'est
+            # 001 qui cree timescaledb. Sans elles, la simulation n'est pas fidele
+            # et 003 echoue sur create_hypertable (piege du test, pas du code).
+            cur.execute("CREATE EXTENSION IF NOT EXISTS timescaledb")
             cur.execute("CREATE TABLE snapshot (x int)")   # simule la base existante
     assert migrate_main(["--sql-dir", str(SQL_DIR), "--baseline-through", "001"]) == 0
     assert _versions(base_jetable) == _migrations_du_repo()
