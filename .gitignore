@@ -87,3 +87,6 @@ __pycache__/
 
 # Notes personnelles
 notes/improvements.md
+
+# Figures generees par scripts/plot_surface.py (voir docs/)
+docs/figures/
