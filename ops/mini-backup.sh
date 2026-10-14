@@ -85,6 +85,16 @@ fi
 
 [ -d "$DEST" ] || echec "garde-fou: $DEST n'existe pas sur le disque externe"
 
+# Garde-fou d'ECRITURE. Les controles precedents ne lisent que des metadonnees
+# (df, presence de fichiers) : un volume monte en lecture seule, ou une
+# autorisation macOS refusee a ce processus, passe tous les tests et fait echouer
+# rsync en une seconde — vecu cinq heures de suite, avec un message d'erreur
+# ecrit... sur le volume injoignable, donc perdu. On tranche tout de suite.
+if ! { : > "$DEST/.vse-ecriture" ; } 2>/dev/null; then
+  echec "garde-fou: le volume est monte et porte le marqueur, mais l'ECRITURE est refusee. Verifier: volume monte en lecture seule, ou autorisation 'Volumes amovibles' non accordee au processus (Reglages > Confidentialite et securite)."
+fi
+rm -f "$DEST/.vse-ecriture"
+
 # espace necessaire : ce qu'on doit copier, plus une marge
 TAILLE_SOURCE_KB="$(du -sk "$REPO/data/deribit/bronze" 2>/dev/null | awk '{print $1}')"
 EGAL_TAILLE="$(du -sk "$DEST/bronze" 2>/dev/null | awk '{print $1}')"
@@ -111,11 +121,18 @@ MODE="complet"
 #        Les .part en cours d'ecriture sont exclus : ils partiront une fois fermes, donc
 #        aucun fichier incomplet ne se retrouve sur la sauvegarde.
 say "rsync du bronze..."
-if rsync -a --exclude '*.part' --stats "$REPO/data/deribit/bronze/" "$DEST/bronze/" >> "$LOGDIR/rsync-$HORODATE.log" 2>&1; then
+# Le detail part dans le journal du disque, mais l'ERREUR va dans $HOME : un
+# message ecrit sur le volume qu'on n'arrive pas a ecrire ne sert a rien.
+RSYNC_DETAIL="$HOME/backup-rsync-$HORODATE.log"
+if rsync -a --exclude '*.part' --stats "$REPO/data/deribit/bronze/" "$DEST/bronze/" \
+     > "$RSYNC_DETAIL" 2>&1; then
+  cat "$RSYNC_DETAIL" >> "$LOGDIR/rsync-$HORODATE.log"
   FICHIERS="$(find "$DEST/bronze" -name '*.jsonl.zst' | wc -l | tr -d ' ')"
   say "bronze synchronise : $FICHIERS fichiers, $(du -sh "$DEST/bronze" | awk '{print $1}')"
 else
-  echec "rsync du bronze a echoue (voir $LOGDIR/rsync-$HORODATE.log)"
+  say "detail rsync ($RSYNC_DETAIL) :"
+  tail -5 "$RSYNC_DETAIL" | while IFS= read -r l; do say "   $l"; done
+  echec "rsync du bronze a echoue (detail : $RSYNC_DETAIL, journal du disque : $LOGDIR/rsync-$HORODATE.log)"
 fi
 
 # --- 3. dump de la base : mode complet seulement ---
@@ -124,9 +141,12 @@ if [ "$BRONZE_ONLY" = "1" ]; then
 else
   DUMP="$DEST/db/volsurface-$HORODATE.dump"
   say "pg_dump -> $DUMP"
-  if ! ( cd "$REPO" && docker compose exec -T db pg_dump -Fc -U vse -d volsurface ) > "$DUMP.part" 2> "$LOGDIR/pg_dump-$HORODATE.err"; then
+  ERR_PG="$HOME/backup-pg_dump-$HORODATE.err"
+  if ! ( cd "$REPO" && docker compose exec -T db pg_dump -Fc -U vse -d volsurface ) > "$DUMP.part" 2> "$ERR_PG"; then
     rm -f "$DUMP.part"
-    echec "pg_dump a echoue (voir $LOGDIR/pg_dump-$HORODATE.err)"
+    say "detail pg_dump ($ERR_PG) :"
+    tail -5 "$ERR_PG" | while IFS= read -r l; do say "   $l"; done
+    echec "pg_dump a echoue (detail : $ERR_PG)"
   fi
   mv "$DUMP.part" "$DUMP"
   TAILLE_DUMP="$(stat -f%z "$DUMP")"
@@ -163,6 +183,9 @@ if os.path.exists(chemin):
 
 now = time.time()
 iso = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(now))
+# l'erreur precedente ne doit pas survivre a un succes : sinon l'etat affiche
+# "ok": true ET un message d'echec, et plus personne ne sait le lire.
+etat.pop("error", None)
 etat.update({
     "ok": True,
     "last_success_utc": now,
