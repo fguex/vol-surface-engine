@@ -122,6 +122,23 @@ def _f(valeur):
         return None
 
 
+def _pct(valeur):
+    """IV de markprice.options, ramenee en POURCENTAGE.
+
+    Deribit publie l'IV dans deux unites selon le canal, et les deux finissent
+    dans la meme colonne :
+        markprice.options.*  ->  iv       = FRACTION     (0.3557 = 35,57 %)
+        ticker.*.100ms       ->  mark_iv  = POURCENTAGE  (35.61)
+    Mesure sur le meme instrument au meme instant (BTC-15OCT26-83500-P, bronze du
+    14 oct.) : iv=0.3557 cote markprice, mark_iv=35.61 cote ticker. Sans cette
+    conversion, un strike d'aile valait 0,36 % de vol et un strike ATM 35,61 %
+    dans la meme colonne — une surface calibree la-dessus est fausse, en
+    silence. Convention retenue : le pourcentage, comme le ticker et DVOL.
+    """
+    x = _f(valeur)
+    return None if x is None else 100.0 * x
+
+
 @dataclass
 class Echantillon:
     """Ce qu'on extrait du bronze : des dimensions et trois familles de faits."""
@@ -188,7 +205,7 @@ def extraire(fichiers, bucket_s: int = BUCKET_S) -> Echantillon:
                     cle = bucket_of(ts, bucket_s)
                     ech.voit(nom, meta, cle)
                     ech.fusionne_marque(nom, cle,
-                                        {"mark_iv": _f(data.get("iv")),
+                                        {"mark_iv": _pct(data.get("iv")),
                                          "mark_price": _f(data.get("mark_price"))},
                                         "markprice")
             elif famille == "ticker" and ts is not None and nom:

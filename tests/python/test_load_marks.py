@@ -102,7 +102,7 @@ def test_extrait_marque_et_perpetuel(tmp_path: Path) -> None:
     ts = int(dt.datetime(2026, 10, 13, 6, 7, tzinfo=dt.timezone.utc).timestamp() * 1000)
     f = _fichier(tmp_path, [
         trame("markprice.options.btc_usd",
-              {"instrument_name": "BTC-24SEP27-104000-P", "iv": 42.5,
+              {"instrument_name": "BTC-24SEP27-104000-P", "iv": 0.425,  # fraction, comme markprice.options
                "mark_price": 0.0512, "timestamp": ts}),
         trame("ticker.BTC-PERPETUAL.100ms",
               {"instrument_name": "BTC-PERPETUAL", "index_price": 83900.0,
@@ -115,7 +115,7 @@ def test_extrait_marque_et_perpetuel(tmp_path: Path) -> None:
 
     assert len(ech.marks) == 1
     marque = next(iter(ech.marks.values()))
-    assert marque["mark_iv"] == 42.5 and marque["mark_price"] == 0.0512
+    assert round(marque["mark_iv"], 6) == 42.5 and marque["mark_price"] == 0.0512
     assert marque["source"] == "markprice"
     assert len(ech.perps) == 1
     assert next(iter(ech.perps.values()))["funding_8h"] == 0.0001
@@ -128,7 +128,7 @@ def test_les_deux_sources_se_rejoignent(tmp_path: Path) -> None:
     ts = int(dt.datetime(2026, 10, 13, 6, 7, tzinfo=dt.timezone.utc).timestamp() * 1000)
     f = _fichier(tmp_path, [
         trame("markprice.options.btc_usd",
-              {"instrument_name": "BTC-24SEP27-104000-P", "iv": 42.5,
+              {"instrument_name": "BTC-24SEP27-104000-P", "iv": 0.425,  # fraction, comme markprice.options
                "mark_price": 0.0512, "timestamp": ts}),
         trame("ticker.BTC-24SEP27-104000-P.100ms",
               {"instrument_name": "BTC-24SEP27-104000-P", "bid_iv": 41.0, "ask_iv": 44.0,
@@ -147,11 +147,43 @@ def test_les_deux_sources_se_rejoignent(tmp_path: Path) -> None:
     assert marque["open_interest"] == 88.0
 
 
+def test_iv_de_markprice_est_convertie_en_pourcentage(tmp_path: Path) -> None:
+    """markprice.options publie l'IV en FRACTION : 0.3557 doit devenir 35.57.
+
+    Sans conversion, la meme colonne portait 0,36 pour un strike d'aile et 35,61
+    pour un strike ATM : mesure reelle du 14 oct. sur BTC-15OCT26-83500-P, ou le
+    bronze donne iv=0.3557 cote markprice et mark_iv=35.61 cote ticker.
+    """
+    ts = int(dt.datetime(2026, 10, 14, 6, 0, tzinfo=dt.timezone.utc).timestamp() * 1000)
+    f = _fichier(tmp_path, [
+        trame("markprice.options.btc_usd",
+              {"instrument_name": "BTC-15OCT26-83500-P", "iv": 0.3557,
+               "mark_price": 0.0084, "timestamp": ts}),
+    ])
+    marque = extraire([f]).marks[("BTC-15OCT26-83500-P", bucket_of(ts))]
+    assert round(marque["mark_iv"], 6) == 35.57, marque["mark_iv"]
+    assert marque["source"] == "markprice"
+
+
+def test_iv_du_ticker_reste_un_pourcentage(tmp_path: Path) -> None:
+    """ticker.mark_iv, bid_iv et ask_iv sont deja en pourcentage : ne pas y toucher."""
+    ts = int(dt.datetime(2026, 10, 14, 6, 0, tzinfo=dt.timezone.utc).timestamp() * 1000)
+    f = _fichier(tmp_path, [
+        trame("ticker.BTC-15OCT26-83500-P.100ms",
+              {"instrument_name": "BTC-15OCT26-83500-P", "mark_iv": 35.61,
+               "bid_iv": 31.07, "ask_iv": 38.13, "timestamp": ts}),
+    ])
+    marque = extraire([f]).marks[("BTC-15OCT26-83500-P", bucket_of(ts))]
+    assert round(marque["mark_iv"], 6) == 35.61
+    assert round(marque["bid_iv"], 6) == 31.07
+    assert round(marque["ask_iv"], 6) == 38.13
+
+
 def test_derniere_valeur_de_la_tranche_gagne(tmp_path: Path) -> None:
     """Un canal pousse plusieurs fois par seconde : la tranche garde le dernier etat."""
     base = dt.datetime(2026, 10, 13, 6, 5, tzinfo=dt.timezone.utc)
     lignes = []
-    for seconde, iv in ((1, 40.0), (60, 41.0), (299, 43.0), (310, 50.0)):
+    for seconde, iv in ((1, 0.40), (60, 0.41), (299, 0.43), (310, 0.50)):  # fractions
         ts = int((base + dt.timedelta(seconds=seconde)).timestamp() * 1000)
         lignes.append(trame("markprice.options.btc_usd",
                             {"instrument_name": "BTC-24SEP27-104000-P", "iv": iv,
@@ -159,7 +191,7 @@ def test_derniere_valeur_de_la_tranche_gagne(tmp_path: Path) -> None:
     ech = extraire([_fichier(tmp_path, lignes)])
     assert len(ech.marks) == 2, "299 s et 310 s tombent dans deux tranches differentes"
     premiere = ech.marks[("BTC-24SEP27-104000-P", base)]
-    assert premiere["mark_iv"] == 43.0, "dans une tranche, la derniere valeur ecrase"
+    assert round(premiere["mark_iv"], 6) == 43.0, "dans une tranche, la derniere valeur ecrase"
 
 
 def test_liste_de_donnees_est_acceptee(tmp_path: Path) -> None:
@@ -167,7 +199,7 @@ def test_liste_de_donnees_est_acceptee(tmp_path: Path) -> None:
     ts = int(dt.datetime(2026, 10, 13, 6, 7, tzinfo=dt.timezone.utc).timestamp() * 1000)
     ligne = json.dumps({"r": 1, "m": {"params": {
         "channel": "markprice.options.btc_usd",
-        "data": [{"instrument_name": "BTC-24SEP27-104000-C", "iv": 40.0,
+        "data": [{"instrument_name": "BTC-24SEP27-104000-C", "iv": 0.40,
                   "mark_price": 0.05, "timestamp": ts}]}}}).encode()
     ech = extraire([_fichier(tmp_path, [ligne])])
     assert len(ech.marks) == 1
@@ -185,13 +217,13 @@ def test_trame_bizarre_n_arrete_pas_le_chargement(tmp_path: Path) -> None:
               {"instrument_name": "BTC-PERPETUAL", "open_interest": "beaucoup", "timestamp": ts}),
         trame("platform_state", {"state": "ok"}),
         trame("markprice.options.btc_usd",
-              {"instrument_name": "BTC-24SEP27-104000-P", "iv": 41.0,
+              {"instrument_name": "BTC-24SEP27-104000-P", "iv": 0.41,
                "mark_price": 0.05, "timestamp": ts}),
     ])
     ech = extraire([f])
     assert len(ech.marks) == 1, "les trames inexploitables ne creent pas de ligne"
     assert len(ech.perps) == 0
-    assert next(iter(ech.marks.values()))["mark_iv"] == 41.0, "la bonne trame est bien lue"
+    assert round(next(iter(ech.marks.values()))["mark_iv"], 6) == 41.0, "la bonne trame est bien lue"
 
 
 def test_colonnes_du_copy_aligne_la_migration() -> None:
