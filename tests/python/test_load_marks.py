@@ -225,6 +225,21 @@ def test_selection_par_heure(tmp_path: Path) -> None:
 # Dimension
 # --------------------------------------------------------------------------
 
+def test_premiere_observation_est_conservee() -> None:
+    """Le debut de validite d'un instrument est sa premiere observation, jamais
+    l'heure du chargement : sinon rejouer un bronze ancien cree un instrument
+    ne aujourd'hui mais expire hier."""
+    from python.jobs.load_marks import Echantillon
+    ech = Echantillon()
+    meta = {"kind": "option"}
+    tard = dt.datetime(2026, 10, 14, 6, 0, tzinfo=dt.timezone.utc)
+    tot = dt.datetime(2026, 10, 11, 6, 0, tzinfo=dt.timezone.utc)
+    ech.voit("ETH-13OCT26-2540-P", meta, tard)
+    ech.voit("ETH-13OCT26-2540-P", meta, tot)
+    ech.voit("ETH-13OCT26-2540-P", meta, tard)
+    assert ech.premiers["ETH-13OCT26-2540-P"] == tot
+
+
 def test_meta_instrument() -> None:
     opt = instrument_meta("BTC-24SEP27-104000-P")
     assert opt is not None

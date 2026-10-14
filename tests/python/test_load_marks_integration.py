@@ -14,6 +14,7 @@ import datetime as dt
 
 import pytest
 
+from python.collect.names import instrument_meta
 from python.db import connection
 from python.jobs.load_marks import Echantillon, charger
 
@@ -71,4 +72,36 @@ def test_trois_chargements_dans_une_transaction() -> None:
             assert encore["option_mark"] == 0, encore
             assert encore["perp_tick"] == 0, encore
             assert encore["vol_index"] == 0, encore
+        conn.rollback()
+
+
+def test_instrument_deja_expire_garde_une_periode_coherente() -> None:
+    """Un instrument expire, charge depuis un bronze ancien, doit naitre avec la
+    date de sa PREMIERE observation et non celle du chargement.
+
+    Sinon sa periode est inversee (fin de validite avant debut) et le controle de
+    coherence refuse l'insertion : tout le lot echoue. C'est exactement ce que le
+    premier rattrapage a produit.
+    """
+    ts = dt.datetime(2026, 10, 13, 6, 5, tzinfo=dt.timezone.utc)   # expire le 13 a 08:00
+    nom = "ETH-13OCT26-2540-P"
+    ech = Echantillon()
+    meta = instrument_meta(nom)
+    assert meta is not None
+    ech.voit(nom, meta, ts)
+    ech.marks[(nom, ts)] = {"instrument_name": nom, "observed_at": ts,
+                            "source": "markprice", "mark_iv": 50.0, "mark_price": 0.01}
+
+    with connection.connect() as conn:
+        with conn.transaction():
+            stats = charger(conn, ech, aujourdhui=dt.date(2026, 10, 14))
+            assert stats["option_mark"] == 1, stats
+            assert stats["fermes"] == 1, stats
+            with conn.cursor() as cur:
+                cur.execute("""SELECT valid_from, valid_to FROM instrument
+                               WHERE instrument_name = %s""", (nom,))
+                ligne = cur.fetchone()
+            assert ligne is not None, "l'instrument doit exister, sinon la cle etrangere tombe"
+            debut, fin = ligne
+            assert fin is not None and debut < fin, (debut, fin)
         conn.rollback()

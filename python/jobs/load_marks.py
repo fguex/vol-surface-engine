@@ -126,11 +126,25 @@ def _f(valeur):
 class Echantillon:
     """Ce qu'on extrait du bronze : des dimensions et trois familles de faits."""
     instruments: dict = field(default_factory=dict)          # nom -> meta
+    premiers: dict = field(default_factory=dict)             # nom -> premiere observation
     marks: dict = field(default_factory=dict)                # (nom, tranche) -> row
     perps: dict = field(default_factory=dict)
     dvols: dict = field(default_factory=dict)
     trames: int = 0
     ignorees: int = 0
+
+    def voit(self, nom: str, meta: dict, instant) -> None:
+        """Enregistre un instrument et la premiere fois qu'on l'a vu.
+
+        Cette date est le debut de validite dans la dimension. Surtout pas
+        l'heure du chargement : rejouer un bronze ancien creerait un instrument
+        ne aujourd'hui mais expire hier, ce que le controle de coherence refuse
+        (vecu au premier rattrapage).
+        """
+        self.instruments[nom] = meta
+        premier = self.premiers.get(nom)
+        if premier is None or instant < premier:
+            self.premiers[nom] = instant
 
     def fusionne_marque(self, nom: str, cle, valeurs: dict, source: str) -> None:
         """Ajoute (ou complete) la marque d'un instrument dans une tranche.
@@ -171,8 +185,9 @@ def extraire(fichiers, bucket_s: int = BUCKET_S) -> Echantillon:
                 # de la surface, y compris les strikes que le carnet ne suit pas.
                 meta = instrument_meta(nom)
                 if meta:
-                    ech.instruments[nom] = meta
-                    ech.fusionne_marque(nom, bucket_of(ts, bucket_s),
+                    cle = bucket_of(ts, bucket_s)
+                    ech.voit(nom, meta, cle)
+                    ech.fusionne_marque(nom, cle,
                                         {"mark_iv": _f(data.get("iv")),
                                          "mark_price": _f(data.get("mark_price"))},
                                         "markprice")
@@ -181,8 +196,8 @@ def extraire(fichiers, bucket_s: int = BUCKET_S) -> Echantillon:
                 if nom.endswith("PERPETUAL"):
                     meta = instrument_meta(nom)
                     if meta:
-                        ech.instruments[nom] = meta
                         cle = bucket_of(ts, bucket_s)
+                        ech.voit(nom, meta, cle)
                         row = {
                             "instrument_name": nom, "observed_at": cle,
                             "index_price": _f(data.get("index_price")),
@@ -201,8 +216,9 @@ def extraire(fichiers, bucket_s: int = BUCKET_S) -> Echantillon:
                 else:
                     meta = instrument_meta(nom)
                     if meta:
-                        ech.instruments[nom] = meta
-                        ech.fusionne_marque(nom, bucket_of(ts, bucket_s), {
+                        cle = bucket_of(ts, bucket_s)
+                        ech.voit(nom, meta, cle)
+                        ech.fusionne_marque(nom, cle, {
                             "mark_iv": _f(data.get("mark_iv")),
                             "mark_price": _f(data.get("mark_price")),
                             "underlying_price": _f(data.get("underlying_price")),
@@ -247,16 +263,21 @@ def ancrer_instruments(conn, echantillon: Echantillon) -> dict:
         return {}
     with conn.cursor() as cur:
         for nom, meta in echantillon.instruments.items():
+            # valid_from = premiere observation dans le bronze (temps du marche) ;
+            # recorded_at = maintenant (temps systeme). Les deux axes restent
+            # distincts, et rejouer un bronze ancien ne cree pas d'incoherence.
             cur.execute(
                 """INSERT INTO instrument (provider, underlying, instrument_name, kind,
                                            expiry, strike, option_type, is_inverse,
-                                           contract_size, quote_currency)
-                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                                           contract_size, quote_currency, valid_from)
+                   VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
+                           coalesce(%s, now()))
                    ON CONFLICT (provider, instrument_name) WHERE valid_to IS NULL
                    DO NOTHING""",
                 (meta["provider"], meta["underlying"], nom, meta["kind"], meta["expiry"],
                  meta["strike"], meta["option_type"], meta["is_inverse"],
-                 meta["contract_size"], meta["quote_currency"]))
+                 meta["contract_size"], meta["quote_currency"],
+                 echantillon.premiers.get(nom)))
         cur.execute(
             """SELECT instrument_name, instrument_sk FROM instrument
                WHERE valid_to IS NULL AND instrument_name = ANY(%s)""",
@@ -268,13 +289,17 @@ def fermer_expires(conn, aujourdhui: dt.date) -> int:
     """Ferme la version courante des options arrivees a echeance.
 
     Une option Deribit expire a 08:00 UTC le jour de son echeance : c'est la fin
-    reelle de validite de l'instrument, donc la fin de sa version.
+    reelle de validite de l'instrument, donc la fin de sa version. La condition
+    sur valid_from evite de fermer une periode qui serait vide ou inversee (un
+    instrument vu pour la premiere fois apres son echeance) : mieux vaut laisser
+    la ligne ouverte que casser le lot entier sur une contrainte.
     """
     with conn.cursor() as cur:
         cur.execute(
             """UPDATE instrument
                   SET valid_to = (expiry + interval '8 hours')::timestamptz
-                WHERE valid_to IS NULL AND kind = 'option' AND expiry < %s""",
+                WHERE valid_to IS NULL AND kind = 'option' AND expiry < %s
+                  AND valid_from < (expiry + interval '8 hours')::timestamptz""",
             (aujourdhui,))
         return cur.rowcount
 
@@ -328,7 +353,7 @@ def charger(conn, echantillon: Echantillon, aujourdhui: dt.date | None = None) -
                                "volatility": r["volatility"]} for r in echantillon.dvols.values()]),
         "instruments": len(sk),
         "instruments_inconnus": sorted(inconnus)[:5],
-        "fermes": fermer_expires(conn, aujourdhui or dt.date.today()),
+        "fermes": fermer_expires(conn, aujourdhui or dt.datetime.now(dt.timezone.utc).date()),
     }
     return stats
 
