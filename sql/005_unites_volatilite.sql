@@ -33,13 +33,22 @@ COMMENT ON COLUMN vol_index.volatility IS
     'DVOL, l''indice de volatilite Deribit, en POURCENTAGE (38.10 = 38,10 %).';
 
 -- Le garde-fou qui aurait attrape le bug : une IV de BTC/ETH sous 1 % n'existe
--- pas, et une IV au-dessus de 500 % non plus. Une valeur dans ]0, 1[ signale une
--- fraction ecrite dans une colonne attendue en pourcentage. 0 est tolere
--- (valeur sentinelle possible pour un instrument sans marque).
+-- pas, une IV au-dessus de 500 % non plus, et une valeur dans ]0, 1[ signale une
+-- fraction ecrite dans une colonne attendue en pourcentage.
+--
+-- Deux valeurs SENTINELLES sont tolerees explicitement, parce que Deribit les
+-- publie vraiment (constate sur 65 000 lignes : bid_iv min 0.0, ask_iv max
+-- 999.0) : 0 = pas de prix, 999 = pas de carnet de ce cote. Un sentinel ne doit
+-- jamais faire echouer un lot de plusieurs heures — le rechargement suit une
+-- transaction par fichier, donc un echec ferait perdre ce fichier.
 ALTER TABLE option_mark ADD CONSTRAINT option_mark_mark_iv_plausible
-    CHECK (mark_iv IS NULL OR mark_iv = 0 OR (mark_iv >= 1 AND mark_iv <= 500));
+    CHECK (mark_iv IS NULL OR mark_iv IN (0, 999)
+           OR (mark_iv >= 1 AND mark_iv <= 500));
 ALTER TABLE option_mark ADD CONSTRAINT option_mark_bid_ask_iv_plausible
-    CHECK ((bid_iv IS NULL OR bid_iv = 0 OR (bid_iv >= 1 AND bid_iv <= 500))
-       AND (ask_iv IS NULL OR ask_iv = 0 OR (ask_iv >= 1 AND ask_iv <= 500)));
+    CHECK ((bid_iv IS NULL OR bid_iv IN (0, 999) OR (bid_iv >= 1 AND bid_iv <= 500))
+       AND (ask_iv IS NULL OR ask_iv IN (0, 999) OR (ask_iv >= 1 AND ask_iv <= 500)));
 ALTER TABLE vol_index ADD CONSTRAINT vol_index_plausible
-    CHECK (volatility = 0 OR (volatility >= 1 AND volatility <= 500));
+    CHECK (volatility IN (0, 999) OR (volatility >= 1 AND volatility <= 500));
+
+COMMENT ON COLUMN option_mark.bid_iv IS
+    'Volatilite implicite a l''achat, en POURCENTAGE. 0 = pas de prix, 999 = valeur sentinelle Deribit (pas de carnet).';
