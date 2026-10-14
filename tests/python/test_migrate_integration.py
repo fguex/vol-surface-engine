@@ -62,6 +62,16 @@ def _nombre_de_tables(nom_base: str) -> int:
             return cur.fetchone()[0]
 
 
+def _migrations_du_repo() -> list[str]:
+    """Les migrations reellement presentes dans sql/.
+
+    Un test qui code la liste en dur casse a chaque nouvelle migration, sans rien
+    apprendre sur le code : le lire depuis le dossier teste la vraie propriete
+    ("toutes les migrations sont appliquees").
+    """
+    return sorted(p.name.split("_")[0] for p in SQL_DIR.glob("[0-9][0-9][0-9]_*.sql"))
+
+
 def _versions(nom_base: str) -> list[str]:
     with psycopg.connect(dbname=nom_base) as conn:
         with conn.cursor() as cur:
@@ -73,7 +83,7 @@ def test_installation_complete_sur_base_neuve(base_jetable, monkeypatch) -> None
     """Le chemin d'installation : 001 cree tout, 002 ajoute btree_gist."""
     monkeypatch.setenv("PGDATABASE", base_jetable)
     assert migrate_main(["--sql-dir", str(SQL_DIR)]) == 0
-    assert _versions(base_jetable) == ["001", "002"]
+    assert _versions(base_jetable) == _migrations_du_repo()
     assert _nombre_de_tables(base_jetable) >= 7  # 6 tables + schema_migrations
 
 
@@ -125,7 +135,7 @@ def test_baseline_sur_une_base_deja_peuplee_ne_casse_rien(base_jetable, monkeypa
         with conn.cursor() as cur:
             cur.execute("CREATE TABLE snapshot (x int)")   # simule la base existante
     assert migrate_main(["--sql-dir", str(SQL_DIR), "--baseline-through", "001"]) == 0
-    assert _versions(base_jetable) == ["001", "002"]
+    assert _versions(base_jetable) == _migrations_du_repo()
     # et un second passage doit etre totalement inerte
     assert migrate_main(["--sql-dir", str(SQL_DIR)]) == 0
 
