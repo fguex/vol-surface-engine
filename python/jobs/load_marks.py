@@ -185,7 +185,9 @@ class Echantillon:
 
 def extraire(fichiers, bucket_s: int = BUCKET_S) -> Echantillon:
     ech = Echantillon()
+    tranches_incompletes: set = set()
     for chemin in fichiers:
+        dernier_ts = None
         for msg in iter_frames(chemin):
             params = msg.get("params") or {}
             canal = str(params.get("channel") or "")
@@ -196,6 +198,8 @@ def extraire(fichiers, bucket_s: int = BUCKET_S) -> Echantillon:
             famille = canal.split(".")[0]
             nom = data.get("instrument_name") or ""
             ts = _f(data.get("timestamp"))
+            if ts is not None and (dernier_ts is None or ts > dernier_ts):
+                dernier_ts = ts
 
             if famille == "markprice" and ts is not None:
                 # mark_iv + mark_price sur TOUTE la chaine : la matiere premiere
@@ -263,6 +267,20 @@ def extraire(fichiers, bucket_s: int = BUCKET_S) -> Echantillon:
                         "volatility": vol}
             else:
                 ech.ignorees += 1
+        # Un fichier en cours d'ecriture (`.part`) se termine par une tranche
+        # INCOMPLETE. L'ecrire maintenant la figerait sur ses premieres secondes :
+        # une ligne deja en base n'est jamais reecrite (ON CONFLICT DO NOTHING).
+        # On la laisse au passage suivant, quand elle sera complete — c'est ce qui
+        # permet de lire le fichier de l'heure en cours sans mentir sur les
+        # donnees, et donc de ramener le retard de la base d'une heure a quelques
+        # minutes (mesure avant/apres dans ops/README.md).
+        if dernier_ts is not None and str(chemin).endswith(".part"):
+            tranches_incompletes.add(bucket_of(dernier_ts, bucket_s))
+
+    if tranches_incompletes:
+        ech.marks = {k: v for k, v in ech.marks.items() if k[1] not in tranches_incompletes}
+        ech.perps = {k: v for k, v in ech.perps.items() if k[1] not in tranches_incompletes}
+        ech.dvols = {k: v for k, v in ech.dvols.items() if k[1] not in tranches_incompletes}
     return ech
 
 
@@ -409,13 +427,23 @@ def fichiers_a_lire(bronze: Path, since_hours: float, tout: bool) -> list[Path]:
     """Fichiers bronze a traiter.
 
     Le nom porte l'heure de debut (`060000Z.jsonl.zst` dans `date=2026-10-13/`) :
-    on peut donc selectionner sans ouvrir les fichiers. Les `.part` sont exclus
-    par defaut : ils changent sous nos pieds. Le fichier de l'heure en cours
-    sera lu au passage suivant, quand il sera ferme.
+    on peut donc selectionner sans ouvrir les fichiers.
+
+    Le fichier de l'heure EN COURS (`.part`) est lu aussi. Il grandit pendant
+    qu'on le lit, mais le lecteur s'arrete a la derniere trame complete et
+    `extraire` ecarte sa derniere tranche (incomplete). L'effet mesure : la base
+    passe d'un retard d'environ une heure — le temps que le fichier soit ferme —
+    a quelques minutes, sans que le fichier suivant puisse etre ecrit avant
+    l'heure (l'ecrivain tourne, on ne fait que le lire).
+
+    Les autres fichiers temporaires ne sont PAS pris : le motif est explicite,
+    pas `*.jsonl*`, pour ne jamais tomber sur un `.part.tmp` de recuperation.
     """
     limite = dt.datetime.now(dt.timezone.utc) - dt.timedelta(hours=since_hours)
     out = []
-    for chemin in sorted(bronze.glob("provider=deribit/date=*/*.jsonl.zst")):
+    candidats = list(bronze.glob("provider=deribit/date=*/*.jsonl.zst"))
+    candidats += list(bronze.glob("provider=deribit/date=*/*.jsonl.zst.part"))
+    for chemin in sorted(candidats):
         if tout:
             out.append(chemin)
             continue

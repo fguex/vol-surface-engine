@@ -239,18 +239,62 @@ def test_colonnes_du_copy_aligne_la_migration() -> None:
 # --------------------------------------------------------------------------
 
 def test_selection_par_heure(tmp_path: Path) -> None:
-    jour = dt.datetime.now(dt.timezone.utc).strftime("%Y-%m-%d")
-    d = tmp_path / "provider=deribit" / f"date={jour}"
-    d.mkdir(parents=True)
-    for nom in ("000000Z.jsonl.zst", "010000Z.jsonl.zst", "230000Z.jsonl.zst"):
-        (d / nom).write_bytes(b"x")
-    (d / "010000Z.jsonl.zst.part").write_bytes(b"x")     # en cours d'ecriture
+    """Le nom porte l'heure : on selectionne sans ouvrir les fichiers. Le fichier
+    de l'heure en cours (`.part`) est inclus ; ce qui est hors fenetre ne l'est
+    pas ; le rattrapage, lui, prend tout."""
+    maintenant = dt.datetime.now(dt.timezone.utc)
+    courant = maintenant.strftime("%H0000Z")
 
-    recents = fichiers_a_lire(tmp_path, since_hours=3, tout=False)
-    assert recents, "l'heure courante doit etre selectionnee"
-    assert all(f.suffix != ".part" for f in recents), "un .part ne doit jamais etre lu"
-    tout = fichiers_a_lire(tmp_path, since_hours=3, tout=True)
-    assert len(tout) == 3, "le rattrapage prend tout le bronze"
+    d = tmp_path / "provider=deribit" / f"date={maintenant:%Y-%m-%d}"
+    d.mkdir(parents=True)
+    (d / f"{courant}.jsonl.zst").write_bytes(b"x")
+    (d / f"{courant}.jsonl.zst.part").write_bytes(b"x")        # en cours d'ecriture
+
+    vieux = maintenant - dt.timedelta(days=2)
+    dv = tmp_path / "provider=deribit" / f"date={vieux:%Y-%m-%d}"
+    dv.mkdir(parents=True)
+    (dv / f"{vieux:%H0000Z}.jsonl.zst").write_bytes(b"x")
+
+    recents = sorted(f.name for f in fichiers_a_lire(tmp_path, since_hours=3, tout=False))
+    assert recents == [f"{courant}.jsonl.zst", f"{courant}.jsonl.zst.part"], recents
+    assert len(fichiers_a_lire(tmp_path, since_hours=3, tout=True)) == 3, \
+        "le rattrapage prend tout le bronze, fichier en cours compris"
+
+
+def _trames_deux_tranches() -> list:
+    """Deux tranches de 5 min : 07:00 (deux trames) puis 07:05 (une trame)."""
+    base = dt.datetime(2026, 10, 14, 7, 0, tzinfo=dt.timezone.utc)
+    out = []
+    for minutes, iv in ((0, 0.40), (1, 0.41), (6, 0.45)):
+        ts = int((base + dt.timedelta(minutes=minutes)).timestamp() * 1000)
+        out.append(trame("markprice.options.btc_usd",
+                         {"instrument_name": "BTC-24SEP27-104000-P", "iv": iv,
+                          "mark_price": 0.05, "timestamp": ts}))
+    return out
+
+
+def test_fichier_en_cours_derniere_tranche_ignoree(tmp_path: Path) -> None:
+    """Le fichier en cours de l'heure grandit sous nos pieds : sa derniere tranche
+    est incomplete et serait figee sur ses premieres secondes (une ligne en base
+    n'est jamais reecrite). On l'ecarte au profit du passage suivant."""
+    f = tmp_path / "070000Z.jsonl.zst.part"
+    f.write_bytes(zstandard.ZstdCompressor().compress(b"\n".join(_trames_deux_tranches()) + b"\n"))
+
+    ech = extraire([f])
+    tranches = sorted({cle for (_nom, cle) in ech.marks})
+
+    assert tranches == [dt.datetime(2026, 10, 14, 7, 0, tzinfo=dt.timezone.utc)], tranches
+
+
+def test_fichier_ferme_garde_toutes_les_tranches(tmp_path: Path) -> None:
+    """Un fichier ferme est complet : aucune tranche ne doit etre perdue."""
+    f = tmp_path / "070000Z.jsonl.zst"
+    f.write_bytes(zstandard.ZstdCompressor().compress(b"\n".join(_trames_deux_tranches()) + b"\n"))
+
+    ech = extraire([f])
+    tranches = sorted({cle for (_nom, cle) in ech.marks})
+
+    assert len(tranches) == 2, tranches
 
 
 # --------------------------------------------------------------------------
