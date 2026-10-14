@@ -74,6 +74,40 @@ docker compose build collector && docker compose up -d collector
   Verifier : `psql -c "select count(*), min(observed_at), max(observed_at) from option_mark"`
   et `tail -20 ~/load-marks.log`. Pour un rattrapage : `--all` (tout le bronze disponible).
 
+### Fraicheur : ce qui est live et ce qui ne l'est pas
+
+  Deux maillons, deux rythmes — a ne pas confondre :
+
+    Deribit -> bronze   PUSH. Le collecteur est ABONNE (websocket) : chaque tick arrive et est
+                        ecrit dans la seconde. Aucun sondage. Un rafraichissement des
+                        instruments toutes les 15 min (`instrument_refresh`) rattrape les
+                        nouvelles echeances ; le watchdog coupe et reabonne si rien n'arrive.
+    bronze -> base      SONDAGE. Le cron passe toutes les 5 minutes, et relit le bronze.
+
+  Le fichier de l'heure en cours (`.part`) est lu lui aussi : le lecteur s'arrete a la derniere
+  trame complete, et sa derniere tranche de 5 min — incomplete — est ecartee, parce qu'une ligne
+  deja en base n'est jamais reecrite. Sans cette regle, une tranche serait figee sur ses
+  premieres secondes.
+
+  Mesure du retard de la base (14 octobre, avant/apres ce changement) :
+
+    avant   max(observed_at) = 07:00, now = 07:52   ->  52 min   (le fichier de l'heure etait
+                                                                  ignore jusqu'a sa fermeture)
+    apres   max(observed_at) = 07:45, now = 07:52   ->   7 min   (derniere tranche complete)
+
+  Invariant a surveiller, il tient en une requete :
+
+```sql
+SELECT max(observed_at) < date_trunc('hour', now())
+                        + floor(extract(minute from now())/5) * interval '5 min' AS ok
+  FROM option_mark;
+```
+
+  Le retard est donc borne par (largeur d'une tranche + cadence du cron), soit ~10 minutes. Pour
+  descendre plus bas, ce n'est pas le code qu'il faut changer mais la ligne de cron :`* * * * *`
+  au lieu de `2-59/5`. En dessous de 5 minutes, seuls les preiers instants d'une tranche se
+  gagnent — le grain de la base reste la tranche.
+
 ## Canaux souscrits
 
   `quote.*` sur tout l'univers (meilleur bid/ask), plus, par devise : `trades.option.*.100ms`,
