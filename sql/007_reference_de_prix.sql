@@ -90,7 +90,7 @@ SELECT DISTINCT ON (underlying, expiry)
        underlying,
        expiry,
        t_annees,
-       observe_le,
+       observed_at,
        strike           AS strike_le_plus_proche,
        index_usd,
        iv_pct           AS iv_atm_pct,
