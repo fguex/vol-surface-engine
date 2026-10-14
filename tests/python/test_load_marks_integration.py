@@ -152,3 +152,42 @@ def test_double_chargement_dans_une_meme_transaction(base_jetable) -> None:
         assert premier["option_mark"] == 1, premier
         assert second["option_mark"] == 0, "le rejeu ne doit pas creer de doublon"
         conn.rollback()
+
+
+def test_reobservation_apres_fermeture_ne_cree_pas_de_version(base_jetable) -> None:
+    """Le cas qui a casse le premier rattrapage complet.
+
+    Une option observee a 07:50 est fermee a 08:00 (son echeance). Le lot suivant
+    la revoit a 07:55 : on doit reutiliser la version existante, pas en creer une
+    seconde qui la chevauche (la contrainte d'exclusion refuserait tout le lot).
+    """
+    nom = "ETH-13OCT26-2520-P"
+    meta = instrument_meta(nom)
+    assert meta is not None
+
+    def lot(minute: int) -> Echantillon:
+        ts = dt.datetime(2026, 10, 13, 7, minute, tzinfo=dt.timezone.utc)
+        ech = Echantillon()
+        ech.voit(nom, meta, ts)
+        ech.marks[(nom, ts)] = {"instrument_name": nom, "observed_at": ts,
+                                "source": "markprice", "mark_iv": 48.0, "mark_price": 0.02}
+        return ech
+
+    with connection.connect() as conn:
+        premier = charger(conn, lot(50), aujourdhui=dt.date(2026, 10, 14))
+        conn.commit()
+        assert premier["option_mark"] == 1, premier
+        assert premier["fermes"] == 1, "l'echeance du 13 a 08:00 a ferme la version"
+
+        # meme instrument, cinq minutes plus tard, dans un autre lot
+        second = charger(conn, lot(55), aujourdhui=dt.date(2026, 10, 14))
+        conn.commit()
+        assert second["option_mark"] == 1, second
+        assert second["fermes"] == 0, "deja ferme : rien a fermer de plus"
+
+        with conn.cursor() as cur:
+            cur.execute("SELECT count(*), max(valid_to) FROM instrument WHERE instrument_name = %s",
+                        (nom,))
+            nombre, fin = cur.fetchone()
+        assert nombre == 1, f"une seule version attendue, {nombre} trouvee(s)"
+        assert fin is not None, "la version doit rester fermee"

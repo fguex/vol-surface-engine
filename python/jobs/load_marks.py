@@ -254,18 +254,39 @@ def extraire(fichiers, bucket_s: int = BUCKET_S) -> Echantillon:
 # --------------------------------------------------------------------------
 
 def ancrer_instruments(conn, echantillon: Echantillon) -> dict:
-    """Cree les instruments manquants, et rend {nom: instrument_sk}.
+    """Rend {nom: instrument_sk} pour la version VALIDE a l'instant observe.
 
-    SCD2 : on n'ecrit jamais par-dessus une version. Si un instrument disparait
-    de la liste (il a expire), sa version courante est fermee, pas supprimee.
+    SCD2 : on ne cree une version que si aucune version existante ne couvre
+    l'observation. C'est essentiel en chargement par lots : une option expiree est
+    fermee (valid_to = echeance) pendant le lot precedent, puis le lot suivant la
+    revoit encore quelques minutes avant l'echeance. Sans recherche prealable, on
+    recree une version qui chevauche la precedente, et la contrainte d'exclusion
+    refuse le lot entier (vecu au premier rattrapage complet).
     """
     if not echantillon.instruments:
         return {}
+    maintenant = dt.datetime.now(dt.timezone.utc)
+    noms = list(echantillon.instruments)
+    instants = [echantillon.premiers.get(n) or maintenant for n in noms]
+
     with conn.cursor() as cur:
-        for nom, meta in echantillon.instruments.items():
-            # valid_from = premiere observation dans le bronze (temps du marche) ;
-            # recorded_at = maintenant (temps systeme). Les deux axes restent
-            # distincts, et rejouer un bronze ancien ne cree pas d'incoherence.
+        # 1. les versions qui couvrent deja l'instant observe
+        cur.execute(
+            """SELECT q.nom, i.instrument_sk
+                 FROM unnest(%s::text[], %s::timestamptz[]) AS q(nom, obs)
+                 JOIN instrument i
+                   ON i.provider = 'deribit' AND i.instrument_name = q.nom
+                  AND i.valid_from <= q.obs
+                  AND (i.valid_to IS NULL OR q.obs < i.valid_to)""",
+            (noms, instants))
+        trouve = dict(cur.fetchall())
+        manquants = [n for n in noms if n not in trouve]
+
+        # 2. celles qui manquent : valid_from = premiere observation dans le bronze
+        #    (temps du marche), recorded_at = maintenant (temps systeme). Les deux
+        #    axes restent distincts, et rejouer un bronze ancien reste coherent.
+        for nom in manquants:
+            meta = echantillon.instruments[nom]
             cur.execute(
                 """INSERT INTO instrument (provider, underlying, instrument_name, kind,
                                            expiry, strike, option_type, is_inverse,
@@ -278,11 +299,13 @@ def ancrer_instruments(conn, echantillon: Echantillon) -> dict:
                  meta["strike"], meta["option_type"], meta["is_inverse"],
                  meta["contract_size"], meta["quote_currency"],
                  echantillon.premiers.get(nom)))
-        cur.execute(
-            """SELECT instrument_name, instrument_sk FROM instrument
-               WHERE valid_to IS NULL AND instrument_name = ANY(%s)""",
-            (list(echantillon.instruments),))
-        return dict(cur.fetchall())
+        if manquants:
+            cur.execute(
+                """SELECT instrument_name, instrument_sk FROM instrument
+                   WHERE valid_to IS NULL AND instrument_name = ANY(%s)""",
+                (manquants,))
+            trouve.update(dict(cur.fetchall()))
+    return trouve
 
 
 def fermer_expires(conn, aujourdhui: dt.date) -> int:
