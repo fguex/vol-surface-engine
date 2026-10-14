@@ -192,3 +192,21 @@ def test_cible_limite_l_application(base_jetable, monkeypatch, tmp_path) -> None
     (dossier / "002_b.sql").write_text("CREATE TABLE t2 (x int);\n", encoding="utf-8")
     assert migrate_main(["--sql-dir", str(dossier), "--target", "001"]) == 0
     assert _versions(base_jetable) == ["001"]
+
+
+def test_les_vues_de_lecture_sont_interrogeables(base_jetable, monkeypatch) -> None:
+    """Une vue qui ne compile pas ne casse pas la migration : elle casse a la
+    premiere lecture, en production, chez celui qui interroge. On la lit donc ici.
+    """
+    monkeypatch.setenv("PGDATABASE", base_jetable)
+    assert migrate_main(["--sql-dir", str(SQL_DIR)]) == 0
+
+    with psycopg.connect(dbname=base_jetable) as conn:
+        with conn.cursor() as cur:
+            cur.execute("""SELECT table_name FROM information_schema.views
+                            WHERE table_schema = 'public' ORDER BY 1""")
+            vues = [r[0] for r in cur.fetchall()]
+            attendues = {"v_surface", "v_atm_terme", "v_perp_funding"}
+            assert attendues <= set(vues), f"vues manquantes : {attendues - set(vues)}"
+            for vue in vues:
+                cur.execute(f"SELECT count(*) FROM {vue}")   # doit compiler, meme vide
