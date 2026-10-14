@@ -288,13 +288,18 @@ def inserer(conn, table: str, cols: tuple, rows: list) -> int:
     """
     if not rows:
         return 0
+    # Le nom de la table temporaire depend de la table cible : plusieurs
+    # chargements se suivent dans la MEME transaction, et une table temporaire
+    # ne disparait qu'au commit (ON COMMIT DROP). Reutiliser le meme nom fait
+    # echouer le deuxieme chargement (vecu : DuplicateTable sur tmp_load).
+    tmp = f"tmp_load_{table}"
+    colonnes = ", ".join(cols)
     with conn.cursor() as cur:
-        cur.execute(f"CREATE TEMP TABLE tmp_load (LIKE {table}) ON COMMIT DROP")
-        colonnes = ", ".join(cols)
-        with cur.copy(f"COPY tmp_load ({colonnes}) FROM STDIN") as cp:
+        cur.execute(f"CREATE TEMP TABLE {tmp} (LIKE {table}) ON COMMIT DROP")
+        with cur.copy(f"COPY {tmp} ({colonnes}) FROM STDIN") as cp:
             for row in rows:
                 cp.write_row(tuple(row[c] for c in cols))
-        cur.execute(f"INSERT INTO {table} ({colonnes}) SELECT {colonnes} FROM tmp_load "
+        cur.execute(f"INSERT INTO {table} ({colonnes}) SELECT {colonnes} FROM {tmp} "
                     f"ON CONFLICT DO NOTHING")
         return cur.rowcount
 
