@@ -413,19 +413,39 @@ def main() -> int:
         return 0
     log.info("%d fichier(s) a traiter, tranches de %d s", len(fichiers), a.bucket_seconds)
 
-    ech = extraire(fichiers, a.bucket_seconds)
-    log.info("extrait : %d trames, %d marques, %d ticks perpetuel, %d DVOL, %d instruments",
-             ech.trames, len(ech.marks), len(ech.perps), len(ech.dvols),
-             len(ech.instruments))
-    if a.dry_run:
-        for cle, row in list(ech.marks.items())[:3]:
-            log.info("exemple %s -> %s", cle, {k: v for k, v in row.items() if v is not None})
-        return 0
-
-    with connection.connect() as conn:
-        with conn.transaction():
+    # UNE TRANSACTION PAR FICHIER, et non une seule pour tout le lot.
+    # Deux raisons, toutes deux vecues :
+    #  - la memoire : un fichier d'heure pese ~40 000 lignes, un rattrapage de
+    #    77 fichiers en accumulerait 3 millions avant la premiere ecriture ;
+    #  - la resilience : un lot unique qui echoue au 76e fichier fait perdre tout
+    #    le travail des 75 precedents.
+    # Les tranches de 5 minutes ne chevauchent jamais deux fichiers (un fichier
+    # par heure), donc decouper ainsi ne coupe aucune donnee en deux.
+    total = {"option_mark": 0, "perp_tick": 0, "vol_index": 0, "fermes": 0}
+    instruments = 0
+    for i, chemin in enumerate(fichiers, 1):
+        ech = extraire([chemin], a.bucket_seconds)
+        log.info("[%d/%d] %s : %d trames, %d marques, %d ticks perpetuel, %d DVOL",
+                 i, len(fichiers), chemin.name, ech.trames, len(ech.marks),
+                 len(ech.perps), len(ech.dvols))
+        if a.dry_run:
+            for cle, row in list(ech.marks.items())[:2]:
+                log.info("    exemple %s -> %s", cle,
+                         {k: v for k, v in row.items() if v is not None})
+            continue
+        with connection.connect() as conn:
             stats = charger(conn, ech)
-    log.info("ecrit : %s", stats)
+            conn.commit()
+        instruments = stats["instruments"]
+        ecart = stats["instruments_inconnus"]
+        if ecart:
+            log.warning("    instruments sans identifiant : %s", ecart)
+        for cle in total:
+            total[cle] += stats[cle]
+
+    if a.dry_run:
+        return 0
+    log.info("total ecrit : %s, dimension : %d instruments", total, instruments)
     return 0
 
 
