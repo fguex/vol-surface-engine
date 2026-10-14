@@ -28,7 +28,7 @@ def raw_call(method: str, params: dict | None = None) -> tuple[bytes, float]:
     try:
         with urllib.request.urlopen(req, timeout=30, context=CTX) as r:
             return r.read(), time.time() - t0
-    except urllib.error.HTTPError as e:
+    except urllib.error.HTTPError:
         return b"", time.time() - t0
 
 

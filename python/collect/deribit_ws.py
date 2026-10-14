@@ -14,7 +14,6 @@ Principes
 from __future__ import annotations
 
 from collections import defaultdict
-from datetime import date
 
 import argparse
 import asyncio
@@ -31,6 +30,8 @@ from typing import Any
 
 import websockets
 import zstandard
+
+from python.collect.names import MONTHS, parse_option_name   # noqa: F401  (re-exporte)
 
 WS_URL = "wss://www.deribit.com/ws/api/v2"
 REST_URL = "https://www.deribit.com/api/v2"
@@ -54,26 +55,8 @@ def list_option_instruments(currency: str) -> list[str]:
         return sorted(x["instrument_name"] for x in json.load(r)["result"])
 
 
-MONTHS = {m: i for i, m in enumerate(
-    "JAN FEB MAR APR MAY JUN JUL AUG SEP OCT NOV DEC".split(), start=1)}
-
-
-def parse_option_name(name: str) -> tuple[date, float, bool] | None:
-    """BTC-24SEP27-104000-P -> (2027-09-24, 104000.0, False). None si non parsable.
-
-    Mois resolus par table et non par strptime : %b depend de la locale du process,
-    et une locale non anglaise ferait echouer la selection ATM en silence.
-    """
-    parts = name.split("-")
-    if len(parts) != 4 or parts[3] not in ("C", "P"):
-        return None
-    jour_mois = parts[1]
-    try:
-        jour, mois, annee = int(jour_mois[:-5]), MONTHS[jour_mois[-5:-2]], int(jour_mois[-2:])
-        strike = float(parts[2])
-        return date(2000 + annee, mois, jour), strike, parts[3] == "C"
-    except (KeyError, ValueError):
-        return None
+# Le parsing des noms vit dans python/collect/names.py (import en tete) : ce
+# module importe websockets, les jobs de chargement ne doivent pas en dependre.
 
 
 def index_price(currency: str) -> float | None:

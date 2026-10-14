@@ -52,6 +52,28 @@ docker compose build collector && docker compose up -d collector
   (`subscribed: true`, `n_ticker` attendu) et la ligne `connected` du dernier événement, qui
   porte `n_channels`, `n_ticker` et les spots utilisés pour la bande ATM.
 
+## Bronze -> base : le chargement des marques
+
+  Le bronze est brut et volumineux ; la base ne doit contenir que ce qu'on interroge. Le job
+  `python.jobs.load_marks` (lance par `mini-load-marks.sh`) echantillonne donc le bronze en
+  tranches de 5 minutes :
+
+    option_mark   mark_iv et mark_price par strike (toute la chaine), plus bid/ask IV, greeks,
+                  open interest et prix sous-jacent pour la bande ATM
+    perp_tick     index, funding courant et sur 8 h, taux, open interest, meilleur bid/ask
+    vol_index     DVOL par devise
+
+  Deux proprietes a ne jamais casser :
+
+    - idempotent : la cle est (instrument_sk, observed_at), l'insertion se fait en
+      ON CONFLICT DO NOTHING. Rejouer une plage ne duplique rien. C'est ce qui rend un
+      rattrapage, ou une restauration, sans danger.
+    - deterministe : `observed_at` vient de l'horodatage du fournisseur, jamais de l'heure
+      d'execution. Rejouer le meme bronze donne les memes lignes.
+
+  Verifier : `psql -c "select count(*), min(observed_at), max(observed_at) from option_mark"`
+  et `tail -20 ~/load-marks.log`. Pour un rattrapage : `--all` (tout le bronze disponible).
+
 ## Canaux souscrits
 
   `quote.*` sur tout l'univers (meilleur bid/ask), plus, par devise : `trades.option.*.100ms`,
@@ -69,9 +91,14 @@ un `git pull` met donc à jour le comportement, et deux copies ne peuvent pas di
 
 ```
 */5 * * * *  ~/vol-surface-engine/ops/mini-stack-guard.sh              # remet Colima + la stack en route
+2-59/5 * * *  ~/vol-surface-engine/ops/mini-load-marks.sh              # bronze -> base (tranches de 5 min)
  5  * * * *  ~/vol-surface-engine/ops/mini-backup.sh --bronze-only     # bronze -> disque externe (horaire)
 30  2 * * *  ~/vol-surface-engine/ops/mini-backup.sh                   # bronze + dump de la base (quotidien)
 ```
+
+`mini-load-marks.sh` echantillonne le bronze vers la base (voir plus bas) ; il tourne a `:02, :07, ...`
+pour ne pas tomber en meme temps que la copie du bronze a `:05`. Chaque passage ecrit dans
+`~/load-marks.log`.
 
 Deux rythmes, parce que les deux objets n'ont pas la même nature : le bronze grandit en continu
 (quelques Mo par heure, irremplaçable, il part toutes les heures à `:05`, cinq minutes après la
