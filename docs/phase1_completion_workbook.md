@@ -1,5 +1,10 @@
 # Phase 1 Completion Workbook — SSVI: data acquisition and calibration
 
+
+> **Expérience CBOE/SPX abandonnée le 11 octobre 2026** : la source est Deribit (BTC/ETH,
+> options inverses + perpétuel). Le code d'ingestion a été supprimé et les tables retirées
+> (`sql/004_retrait_cboe.sql`). Ce document est conservé comme trace de la phase 1.
+
 Follow-up to docs/phase1_ssvi_workbook.md. Part A = exercises (goal, hints, pseudocode). Part B = full solution, compiled and tested.
 
 ## Acceptance criterion for phase 1

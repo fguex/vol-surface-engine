@@ -10,7 +10,7 @@
 #   - avec cette sequence : 0 erreur, 0 avertissement, hypertables, index, cles
 #     etrangeres et donnees restaures a l'identique ;
 #   - sans elle : 2 erreurs (contrainte de chunk, option ONLY) et la cle etrangere
-#     de quote_curated manquante apres restauration.
+#     de la table de faits manquante apres restauration.
 #
 # Usage :
 #   ops/restore-dump.sh <fichier.dump> [nom_base_jetable] [--keep]
@@ -59,21 +59,21 @@ echo "pg_restore : exit=$CODE erreurs=$ERREURS avertissements=$AVERTS"
 [ "$ERREURS" -gt 0 ] && grep 'pg_restore: error' /tmp/vse_restore.err | sed 's/^/  /'
 
 echo "--- contenu restaure ---"
-$PSQL -d "$CIBLE" -tAc "select 'cotations='||count(*)||' snapshot='||(select count(*) from snapshot)||' migrations='||(select count(*) from schema_migrations) from quote_curated"
+$PSQL -d "$CIBLE" -tAc "select 'instrument='||(select count(*) from instrument)||' option_mark='||(select count(*) from option_mark)||' migrations='||(select count(*) from schema_migrations)"
 $PSQL -d "$CIBLE" -tAc "select 'hypertables: '||coalesce(string_agg(hypertable_name, ', '), '(aucune)') from timescaledb_information.hypertables"
 echo "--- production (pour comparaison) ---"
-$PSQL -d volsurface -tAc "select 'cotations='||count(*)||' snapshot='||(select count(*) from snapshot)||' migrations='||(select count(*) from schema_migrations) from quote_curated"
+$PSQL -d volsurface -tAc "select 'instrument='||(select count(*) from instrument)||' option_mark='||(select count(*) from option_mark)||' migrations='||(select count(*) from schema_migrations)"
 
-# 5. la comparaison est le verdict
-ATTENDU="$($PSQL -d volsurface -tAc 'select count(*) from quote_curated' | tr -d '[:space:]')"
-OBTENU="$($PSQL -d "$CIBLE" -tAc 'select count(*) from quote_curated' | tr -d '[:space:]')"
+# 5. la comparaison est le verdict (option_mark : la table de faits la plus grosse)
+ATTENDU="$($PSQL -d volsurface -tAc 'select count(*) from option_mark' | tr -d '[:space:]')"
+OBTENU="$($PSQL -d "$CIBLE" -tAc 'select count(*) from option_mark' | tr -d '[:space:]')"
 
 if [ "$GARDER" = "0" ]; then
   $PSQL -d volsurface -c "DROP DATABASE $CIBLE" >/dev/null && echo "base de test supprimee"
 fi
 
 if [ "$CODE" = "0" ] && [ "$ERREURS" = "0" ] && [ "$ATTENDU" = "$OBTENU" ]; then
-  echo "VERDICT: sauvegarde valide ($OBTENU cotations, restauration sans erreur)"
+  echo "VERDICT: sauvegarde valide ($OBTENU lignes option_mark, restauration sans erreur)"
   exit 0
 fi
 echo "VERDICT: probleme (attendu=$ATTENDU obtenu=$OBTENU, exit=$CODE, erreurs=$ERREURS)" >&2

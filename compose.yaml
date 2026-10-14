@@ -24,25 +24,6 @@ services:
       timeout: 5s
       retries: 12
 
-  ingest:
-    # Ancien job CBOE (licence : pas d'archivage automatique). Ne demarre
-    # qu'explicitement : docker compose --profile cboe run --rm ingest
-    profiles: ["cboe"]
-    build: .
-    depends_on:
-      db:
-        condition: service_healthy
-    environment:
-      PGHOST: db
-      PGUSER: vse
-      PGPASSWORD: ${POSTGRES_PASSWORD}
-      PGDATABASE: volsurface
-      DATA_DIR: /app/data
-    volumes:
-      - ./data:/app/data
-      - ./python:/app/python  # hot-reload en dev : pas de rebuild apres chaque modif
-    command: ["python", "-m", "python.jobs.ingest"]
-
   collector:
     # Collecte tick Deribit BTC+ETH -> bronze zstd. Pas de dependance a la DB :
     # le bronze est sur disque, la DB peut etre en panne sans perte de donnees.

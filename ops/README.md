@@ -38,8 +38,8 @@ Codes de sortie : `0` ok, `1` erreur, `2` usage, `3` migration modifiée après 
 
 ## Piège : modifier le collecteur exige un rebuild
 
-  Le service `collector` exécute le code **embarqué dans l'image** (le montage `./python` est sur
-  `ingest` seulement). Après une modification de `python/collect/` ou de la commande dans
+  Le service `collector` exécute le code **embarqué dans l'image** (aucun montage de `./python`).
+  Après une modification de `python/collect/` ou de la commande dans
   `compose.yaml`, un simple `docker compose up -d collector` recrée le conteneur avec l'ancien
   code : si la commande a gagné une option, le conteneur part en boucle de redémarrage sur
   `unrecognized arguments` (vécu). Il faut :
@@ -168,7 +168,8 @@ Trois choses mesurées le 13 oct. sur TimescaleDB 2.30, qui ne se devinent pas :
 2. Avec la bonne séquence : **0 erreur, 0 avertissement**, hypertables, index et clés
    étrangères restaurés à l'identique.
 3. Sans elle : 2 erreurs (contrainte sur un chunk interne, `ONLY` sur une hypertable) et la
-   clé étrangère `quote_curated_snapshot_id_fkey` manquante après restauration. Les données
+   clé étrangère de la table de faits manquante après restauration (vécu sur les hypertables
+   CBOE, depuis retirées ; le mécanisme est le même pour `option_mark`). Les données
    restent complètes, la clé se recrée d'un `ALTER TABLE ... ADD CONSTRAINT`, mais autant
    faire les choses dans le bon ordre.
 

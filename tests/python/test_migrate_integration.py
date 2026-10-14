@@ -137,7 +137,9 @@ def test_baseline_sur_une_base_deja_peuplee_ne_casse_rien(base_jetable, monkeypa
             # 001 qui cree timescaledb. Sans elles, la simulation n'est pas fidele
             # et 003 echoue sur create_hypertable (piege du test, pas du code).
             cur.execute("CREATE EXTENSION IF NOT EXISTS timescaledb")
-            cur.execute("CREATE TABLE snapshot (x int)")   # simule la base existante
+            # Simule la base existante : une table de 001, creee hors du runner.
+            # 004 la supprimera lors du second passage, sans consequence pour le test.
+            cur.execute("CREATE TABLE snapshot (x int)")
     assert migrate_main(["--sql-dir", str(SQL_DIR), "--baseline-through", "001"]) == 0
     assert _versions(base_jetable) == _migrations_du_repo()
     # et un second passage doit etre totalement inerte

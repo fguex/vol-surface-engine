@@ -1,5 +1,10 @@
 # Plan — DB + ingestion automatique + monitoring sur le Mac mini
 
+
+> **Expérience CBOE/SPX abandonnée le 11 octobre 2026** : la source est Deribit (BTC/ETH,
+> options inverses + perpétuel). Le code d'ingestion a été supprimé et les tables retirées
+> (`sql/004_retrait_cboe.sql`). Ce document est conservé comme trace de la phase 1.
+
 ## TLDR (explain like I'm 5)
 
 - Le Mac mini devient une petite "usine" qui tourne seule.

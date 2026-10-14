@@ -1,5 +1,10 @@
 # Design données — Deribit BTC/ETH, DB temps réel, et préparation ML
 
+
+> **Expérience CBOE/SPX abandonnée le 11 octobre 2026** : la source est Deribit (BTC/ETH,
+> options inverses + perpétuel). Le code d'ingestion a été supprimé et les tables retirées
+> (`sql/004_retrait_cboe.sql`). Ce document est conservé comme trace de la phase 1.
+
 Statut : proposition à valider. Tous les chiffres marqués « mesuré » viennent d'un run réel
 (collecteur du 8 oct. 2026 + sondage API du 10 oct. 2026). Rien n'est estimé sans le dire.
 

@@ -1,5 +1,10 @@
 # Phase 1 SSVI Workbook
 
+
+> **Expérience CBOE/SPX abandonnée le 11 octobre 2026** : la source est Deribit (BTC/ETH,
+> options inverses + perpétuel). Le code d'ingestion a été supprimé et les tables retirées
+> (`sql/004_retrait_cboe.sql`). Ce document est conservé comme trace de la phase 1.
+
 ## Positioning
 
 This document is written as a junior quant-dev exercise for the repository vol-surface-engine. The goal is to finish phase 1 cleanly: a European SSVI calibration that is understandable, testable, and usable as a warm start for the later American-option calibration loop.
