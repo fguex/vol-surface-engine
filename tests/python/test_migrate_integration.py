@@ -54,11 +54,17 @@ def base_jetable():
             cur.execute(f'DROP DATABASE IF EXISTS "{nom}" WITH (FORCE)')
 
 
-def _nombre_de_tables(nom_base: str) -> int:
+def _tables_de_silver(nom_base: str) -> int:
+    """Les tables de la couche conformee.
+
+    Depuis la migration 008, les tables de travail vivent dans `silver` : compter `public`
+    donnerait 0 des deux cotes de la comparaison, et le test d'idempotence passerait en ne
+    verifiant plus rien.
+    """
     with psycopg.connect(dbname=nom_base) as conn:
         with conn.cursor() as cur:
             cur.execute("SELECT count(*) FROM information_schema.tables"
-                        " WHERE table_schema='public' AND table_type='BASE TABLE'")
+                        " WHERE table_schema='silver' AND table_type='BASE TABLE'")
             return cur.fetchone()[0]
 
 
@@ -112,9 +118,9 @@ def test_idempotence(base_jetable, monkeypatch) -> None:
     """Rejouer le runner ne reapplique rien et ne casse rien."""
     monkeypatch.setenv("PGDATABASE", base_jetable)
     migrate_main(["--sql-dir", str(SQL_DIR)])
-    tables_avant = _nombre_de_tables(base_jetable)
+    tables_avant = _tables_de_silver(base_jetable)
     assert migrate_main(["--sql-dir", str(SQL_DIR)]) == 0
-    assert _nombre_de_tables(base_jetable) == tables_avant
+    assert _tables_de_silver(base_jetable) == tables_avant
 
 
 def _table_existe(nom_base: str, table: str) -> bool:
@@ -215,9 +221,39 @@ def test_les_vues_de_lecture_sont_interrogeables(base_jetable, monkeypatch) -> N
     with psycopg.connect(dbname=base_jetable) as conn:
         with conn.cursor() as cur:
             cur.execute("""SELECT table_name FROM information_schema.views
-                            WHERE table_schema = 'public' ORDER BY 1""")
+                            WHERE table_schema = 'gold' ORDER BY 1""")
             vues = [r[0] for r in cur.fetchall()]
-            attendues = {"v_surface", "v_atm_terme", "v_perp_funding"}
+            attendues = {"v_spot", "v_surface", "v_atm_terme", "v_perp_funding"}
             assert attendues <= set(vues), f"vues manquantes : {attendues - set(vues)}"
             for vue in vues:
-                cur.execute(f"SELECT count(*) FROM {vue}")   # doit compiler, meme vide
+                cur.execute(f"SELECT count(*) FROM gold.{vue}")   # doit compiler, meme vide
+
+
+def test_les_couches_sont_a_leur_place(base_jetable, monkeypatch) -> None:
+    """bronze / silver / gold est une convention : une convention non testee derive.
+
+    On fige ici OU vivent les objets, pas seulement leur existence : deplacer une table
+    d'une couche a l'autre doit casser ce test, pour que ce soit un choix et non un effet
+    de bord.
+    """
+    monkeypatch.setenv("PGDATABASE", base_jetable)
+    assert migrate_main(["--sql-dir", str(SQL_DIR)]) == 0
+
+    with psycopg.connect(dbname=base_jetable) as conn:
+        with conn.cursor() as cur:
+            cur.execute("SELECT nspname FROM pg_namespace WHERE nspname IN "
+                        "('bronze', 'silver', 'gold') ORDER BY 1")
+            assert [r[0] for r in cur.fetchall()] == ["bronze", "gold", "silver"]
+
+            cur.execute("""SELECT table_schema, table_name FROM information_schema.tables
+                            WHERE table_type = 'BASE TABLE'
+                              AND table_schema IN ('silver', 'public')
+                            ORDER BY 1, 2""")
+            attendu = {
+                ("public", "schema_migrations"),          # le registre du migrateur, hors couches
+                ("silver", "instrument"),
+                ("silver", "option_mark"),
+                ("silver", "perp_tick"),
+                ("silver", "vol_index"),
+            }
+            assert {(s, t) for s, t in cur.fetchall()} == attendu

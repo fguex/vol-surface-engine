@@ -309,7 +309,7 @@ def ancrer_instruments(conn, echantillon: Echantillon) -> dict:
         cur.execute(
             """SELECT q.nom, i.instrument_sk
                  FROM unnest(%s::text[], %s::timestamptz[]) AS q(nom, obs)
-                 JOIN instrument i
+                 JOIN silver.instrument i
                    ON i.provider = 'deribit' AND i.instrument_name = q.nom
                   AND i.valid_from <= q.obs
                   AND (i.valid_to IS NULL OR q.obs < i.valid_to)""",
@@ -323,7 +323,7 @@ def ancrer_instruments(conn, echantillon: Echantillon) -> dict:
         for nom in manquants:
             meta = echantillon.instruments[nom]
             cur.execute(
-                """INSERT INTO instrument (provider, underlying, instrument_name, kind,
+                """INSERT INTO silver.instrument (provider, underlying, instrument_name, kind,
                                            expiry, strike, option_type, is_inverse,
                                            contract_size, quote_currency, valid_from)
                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s,
@@ -336,7 +336,7 @@ def ancrer_instruments(conn, echantillon: Echantillon) -> dict:
                  echantillon.premiers.get(nom)))
         if manquants:
             cur.execute(
-                """SELECT instrument_name, instrument_sk FROM instrument
+                """SELECT instrument_name, instrument_sk FROM silver.instrument
                    WHERE valid_to IS NULL AND instrument_name = ANY(%s)""",
                 (manquants,))
             trouve.update(dict(cur.fetchall()))
@@ -354,7 +354,7 @@ def fermer_expires(conn, aujourdhui: dt.date) -> int:
     """
     with conn.cursor() as cur:
         cur.execute(
-            """UPDATE instrument
+            """UPDATE silver.instrument
                   SET valid_to = (expiry + interval '8 hours')::timestamptz
                 WHERE valid_to IS NULL AND kind = 'option' AND expiry < %s
                   AND valid_from < (expiry + interval '8 hours')::timestamptz""",
@@ -364,6 +364,9 @@ def fermer_expires(conn, aujourdhui: dt.date) -> int:
 
 def inserer(conn, table: str, cols: tuple, rows: list) -> int:
     """COPY dans une table temporaire puis INSERT ... ON CONFLICT DO NOTHING.
+
+    Le schema est ecrit en dur (silver) : ce chargeur alimente la couche conformee, et rien
+    d'autre. Un search_path implicite cacherait cette responsabilite au lecteur.
 
     COPY est le seul moyen d'ecrire des dizaines de milliers de lignes en une
     fraction de seconde ; le ON CONFLICT final garantit qu'un rejeu ne duplique
@@ -381,11 +384,11 @@ def inserer(conn, table: str, cols: tuple, rows: list) -> int:
         # DROP d'abord : un deuxieme chargement dans la MEME transaction (rejeu,
         # test) viserait la meme table, qui n'est liberee qu'au commit.
         cur.execute(f"DROP TABLE IF EXISTS {tmp}")
-        cur.execute(f"CREATE TEMP TABLE {tmp} (LIKE {table}) ON COMMIT DROP")
+        cur.execute(f"CREATE TEMP TABLE {tmp} (LIKE silver.{table}) ON COMMIT DROP")
         with cur.copy(f"COPY {tmp} ({colonnes}) FROM STDIN") as cp:
             for row in rows:
                 cp.write_row(tuple(row[c] for c in cols))
-        cur.execute(f"INSERT INTO {table} ({colonnes}) SELECT {colonnes} FROM {tmp} "
+        cur.execute(f"INSERT INTO silver.{table} ({colonnes}) SELECT {colonnes} FROM {tmp} "
                     f"ON CONFLICT DO NOTHING")
         return cur.rowcount
 

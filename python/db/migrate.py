@@ -53,7 +53,7 @@ NO_TX_MARKER = "-- migrate:no-transaction"
 LOCK_KEY = 0x5653454D  # "VSEM", verrou consultatif du runner
 
 SCHEMA_MIGRATIONS_DDL = """
-CREATE TABLE IF NOT EXISTS schema_migrations (
+CREATE TABLE IF NOT EXISTS public.schema_migrations (
     version     text        PRIMARY KEY,
     name        text        NOT NULL,
     checksum    text        NOT NULL,
@@ -104,7 +104,7 @@ def discover(sql_dir: Path) -> list[Migration]:
 def applied_rows(conn) -> dict[str, dict]:
     with conn.cursor() as cur:
         cur.execute("SELECT version, name, checksum, applied_at, duration_ms, note"
-                    " FROM schema_migrations")
+                    " FROM public.schema_migrations")
         return {r[0]: {"name": r[1], "checksum": r[2], "applied_at": r[3],
                        "duration_ms": r[4], "note": r[5]} for r in cur.fetchall()}
 
@@ -137,7 +137,7 @@ def record(conn, m: Migration, duration_ms: int, note: str | None = None) -> Non
     who = f"{os.getenv('USER') or os.getenv('USERNAME') or '?'}@{socket.gethostname()}"
     with conn.cursor() as cur:
         cur.execute(
-            "INSERT INTO schema_migrations (version, name, checksum, applied_by, duration_ms, note)"
+            "INSERT INTO public.schema_migrations (version, name, checksum, applied_by, duration_ms, note)"
             " VALUES (%s, %s, %s, %s, %s, %s)",
             (m.version, m.name, m.checksum, who, duration_ms, note),
         )

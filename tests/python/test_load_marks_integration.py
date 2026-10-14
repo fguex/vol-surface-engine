@@ -130,7 +130,7 @@ def test_instrument_deja_expire_garde_une_periode_coherente(base_jetable) -> Non
         assert stats["option_mark"] == 1, stats
         assert stats["fermes"] == 1, stats
         with conn.cursor() as cur:
-            cur.execute("""SELECT valid_from, valid_to FROM instrument
+            cur.execute("""SELECT valid_from, valid_to FROM silver.instrument
                            WHERE instrument_name = %s AND valid_to IS NOT NULL""", (nom,))
             ligne = cur.fetchone()
         assert ligne is not None, "l'instrument doit exister : la cle etrangere en depend"
@@ -186,7 +186,7 @@ def test_reobservation_apres_fermeture_ne_cree_pas_de_version(base_jetable) -> N
         assert second["fermes"] == 0, "deja ferme : rien a fermer de plus"
 
         with conn.cursor() as cur:
-            cur.execute("SELECT count(*), max(valid_to) FROM instrument WHERE instrument_name = %s",
+            cur.execute("SELECT count(*), max(valid_to) FROM silver.instrument WHERE instrument_name = %s",
                         (nom,))
             nombre, fin = cur.fetchone()
         assert nombre == 1, f"une seule version attendue, {nombre} trouvee(s)"

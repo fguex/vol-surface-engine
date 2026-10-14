@@ -59,14 +59,14 @@ echo "pg_restore : exit=$CODE erreurs=$ERREURS avertissements=$AVERTS"
 [ "$ERREURS" -gt 0 ] && grep 'pg_restore: error' /tmp/vse_restore.err | sed 's/^/  /'
 
 echo "--- contenu restaure ---"
-$PSQL -d "$CIBLE" -tAc "select 'instrument='||(select count(*) from instrument)||' option_mark='||(select count(*) from option_mark)||' migrations='||(select count(*) from schema_migrations)"
+$PSQL -d "$CIBLE" -tAc "select 'instrument='||(select count(*) from silver.instrument)||' option_mark='||(select count(*) from silver.option_mark)||' migrations='||(select count(*) from public.schema_migrations)"
 $PSQL -d "$CIBLE" -tAc "select 'hypertables: '||coalesce(string_agg(hypertable_name, ', '), '(aucune)') from timescaledb_information.hypertables"
 echo "--- production (pour comparaison) ---"
-$PSQL -d volsurface -tAc "select 'instrument='||(select count(*) from instrument)||' option_mark='||(select count(*) from option_mark)||' migrations='||(select count(*) from schema_migrations)"
+$PSQL -d volsurface -tAc "select 'instrument='||(select count(*) from silver.instrument)||' option_mark='||(select count(*) from silver.option_mark)||' migrations='||(select count(*) from public.schema_migrations)"
 
 # 5. la comparaison est le verdict (option_mark : la table de faits la plus grosse)
-ATTENDU="$($PSQL -d volsurface -tAc 'select count(*) from option_mark' | tr -d '[:space:]')"
-OBTENU="$($PSQL -d "$CIBLE" -tAc 'select count(*) from option_mark' | tr -d '[:space:]')"
+ATTENDU="$($PSQL -d volsurface -tAc 'select count(*) from silver.option_mark' | tr -d '[:space:]')"
+OBTENU="$($PSQL -d "$CIBLE" -tAc 'select count(*) from silver.option_mark' | tr -d '[:space:]')"
 
 if [ "$GARDER" = "0" ]; then
   $PSQL -d volsurface -c "DROP DATABASE $CIBLE" >/dev/null && echo "base de test supprimee"

@@ -41,9 +41,9 @@ def smile(conn, sous_jacent: str, n_echeances: int):
     """IV en fonction de k = ln(K/F), une courbe par echeance."""
     return lire(conn, """
         SELECT expiry, t_annees, k_logm, iv_pct, option_type
-          FROM v_surface
+          FROM gold.v_surface
          WHERE underlying = %s AND expiry > current_date
-           AND expiry IN (SELECT DISTINCT expiry FROM v_atm_terme
+           AND expiry IN (SELECT DISTINCT expiry FROM gold.v_atm_terme
                            WHERE underlying = %s AND expiry > current_date
                            ORDER BY expiry LIMIT %s)
          ORDER BY expiry, k_logm
@@ -53,7 +53,7 @@ def smile(conn, sous_jacent: str, n_echeances: int):
 def terme(conn):
     return lire(conn, """
         SELECT underlying, expiry, t_annees, iv_atm_pct, strike_le_plus_proche, index_usd
-          FROM v_atm_terme ORDER BY underlying, t_annees
+          FROM gold.v_atm_terme ORDER BY underlying, t_annees
     """)
 
 
