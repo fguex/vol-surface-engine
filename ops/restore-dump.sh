@@ -23,7 +23,16 @@ REPO="${REPO:-$HOME/vol-surface-engine}"
 DUMP="${1:-}"
 CIBLE="${2:-restore_test}"
 GARDER=0
-for a in "$@"; do [ "$a" = "--keep" ] && GARDER=1; done
+COMPARER=1
+for a in "$@"; do
+  [ "$a" = "--keep" ] && GARDER=1
+  # --no-compare : la comparaison avec la production n'a de sens que juste apres
+  # un dump. Sur un dump de la nuit restaure le lendemain midi, la production a
+  # grandi : l'ecart est normal, et juger sur lui ferait echouer la restauration
+  # de controle chaque semaine. Le controle hebdomadaire juge donc sur l'absence
+  # d'erreur et sur le contenu restaure (voir mini-verif-restauration.sh).
+  [ "$a" = "--no-compare" ] && COMPARER=0
+done
 
 [ -n "$DUMP" ] || { echo "usage: $0 <fichier.dump> [nom_base_jetable] [--keep]" >&2; exit 2; }
 [ -f "$DUMP" ] || { echo "dump introuvable : $DUMP" >&2; exit 2; }
@@ -65,13 +74,25 @@ echo "--- production (pour comparaison) ---"
 $PSQL -d volsurface -tAc "select 'instrument='||(select count(*) from silver.instrument)||' option_mark='||(select count(*) from silver.option_mark)||' migrations='||(select count(*) from public.schema_migrations)"
 
 # 5. la comparaison est le verdict (option_mark : la table de faits la plus grosse)
-ATTENDU="$($PSQL -d volsurface -tAc 'select count(*) from silver.option_mark' | tr -d '[:space:]')"
-OBTENU="$($PSQL -d "$CIBLE" -tAc 'select count(*) from silver.option_mark' | tr -d '[:space:]')"
+ATTENDU=""
+OBTENU=""
+if [ "$COMPARER" = "1" ]; then
+  ATTENDU="$($PSQL -d volsurface -tAc 'select count(*) from silver.option_mark' | tr -d '[:space:]')"
+  OBTENU="$($PSQL -d "$CIBLE" -tAc 'select count(*) from silver.option_mark' | tr -d '[:space:]')"
+fi
 
 if [ "$GARDER" = "0" ]; then
   $PSQL -d volsurface -c "DROP DATABASE $CIBLE" >/dev/null && echo "base de test supprimee"
 fi
 
+if [ "$COMPARER" = "0" ]; then
+  if [ "$CODE" = "0" ] && [ "$ERREURS" = "0" ]; then
+    echo "VERDICT: restauration sans erreur (comparaison avec la production non demandee)"
+    exit 0
+  fi
+  echo "VERDICT: probleme (restauration exit=$CODE, erreurs=$ERREURS)" >&2
+  exit 1
+fi
 if [ "$CODE" = "0" ] && [ "$ERREURS" = "0" ] && [ "$ATTENDU" = "$OBTENU" ]; then
   echo "VERDICT: sauvegarde valide ($OBTENU lignes option_mark, restauration sans erreur)"
   exit 0

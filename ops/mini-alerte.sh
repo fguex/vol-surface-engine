@@ -122,7 +122,9 @@ fi
 
 # 4. restauration verifiee : la passe hebdomadaire a-t-elle lieu, et reussit-elle ?
 V="$HOME/verif_restauration_status.json"
-if [ -f "$V" ]; then
+if [ ! -f "$V" ]; then
+  probleme restauration "aucune restauration de controle enregistree (le cron du dimanche a-t-il tourne ?)"
+else
   RS="$(python3 - "$V" <<'PY' 2>/dev/null || echo "0 0"
 import json, sys
 try:
@@ -180,7 +182,7 @@ fi
 mv "$ACTIF" "$ETAT"
 
 if [ "$NB" -eq 0 ]; then
-  say "tout va bien (sauvegarde, collecte, base, restauration, disques)"
+  say "tout va bien : aucun des controles ne signale de probleme"
 else
   say "$NB probleme(s) actif(s) — voir ~/alerte.log"
 fi
