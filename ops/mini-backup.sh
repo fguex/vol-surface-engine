@@ -123,10 +123,13 @@ MODE="complet"
 say "rsync du bronze..."
 # Le detail part dans le journal du disque, mais l'ERREUR va dans $HOME : un
 # message ecrit sur le volume qu'on n'arrive pas a ecrire ne sert a rien.
-RSYNC_DETAIL="$HOME/backup-rsync-$HORODATE.log"
+# Nom horodate a la seconde : une passe ratee ne doit pas voir son detail ecrase
+# par la passe suivante (vecu le 14 oct. : cause du seul echec non retrouvee).
+RSYNC_DETAIL="$HOME/backup-rsync-$HORODATE-$(date -u '+%H%M%S').log"
 if rsync -a --exclude '*.part' --stats "$REPO/data/deribit/bronze/" "$DEST/bronze/" \
      > "$RSYNC_DETAIL" 2>&1; then
   cat "$RSYNC_DETAIL" >> "$LOGDIR/rsync-$HORODATE.log"
+  rm -f "$RSYNC_DETAIL"
   FICHIERS="$(find "$DEST/bronze" -name '*.jsonl.zst' | wc -l | tr -d ' ')"
   say "bronze synchronise : $FICHIERS fichiers, $(du -sh "$DEST/bronze" | awk '{print $1}')"
 else

@@ -144,10 +144,12 @@ Deux entrées, toutes deux pointant sur le **repo** (pas sur une copie dans `~/b
 un `git pull` met donc à jour le comportement, et deux copies ne peuvent pas diverger.
 
 ```
-*/5 * * * *   ~/vol-surface-engine/ops/mini-stack-guard.sh                # remet Colima + la stack en route
-2-59/5 * * *  ~/vol-surface-engine/ops/mini-load-marks.sh                # bronze -> base (tranches de 5 min)
- 5  * * * *   ~/vol-surface-engine/ops/mini-backup-launch.sh --bronze-only  # bronze -> disque externe (horaire)
-30  2 * * *   ~/vol-surface-engine/ops/mini-backup-launch.sh             # bronze + dump de la base (quotidien)
+*/5 * * * *    ~/vol-surface-engine/ops/mini-stack-guard.sh                # remet Colima + la stack en route
+*/10 * * * *   ~/vol-surface-engine/ops/mini-alerte.sh                     # veille : sauvegarde, collecte, base, disques
+2-59/5 * * * * ~/vol-surface-engine/ops/mini-load-marks.sh                 # bronze -> base (tranches de 5 min)
+ 5  * * * *    ~/vol-surface-engine/ops/mini-backup-launch.sh --bronze-only  # bronze -> disque externe (horaire)
+30  2 * * *    ~/vol-surface-engine/ops/mini-backup-launch.sh              # bronze + dump de la base (quotidien)
+ 0  4 * * 0    ~/vol-surface-engine/ops/mini-verif-restauration.sh         # restauration de controle (dimanche)
 ```
 
 **Pourquoi la sauvegarde passe par `mini-backup-launch.sh`** (et pas directement par
@@ -244,6 +246,57 @@ emporte les deux copies. La troisième copie se fait depuis le MacBook, qui tire
 le bronze par SSH (`rsync`), à cadence hebdomadaire. À mettre en place quand le MacBook est
 joignable de façon fiable.
 
+
+## Veille et alertes
+
+Rien ne lisait les journaux. Le 14 oct. 2026, la sauvegarde quotidienne a échoué dès la
+première étape (aucun dump écrit) et l'information est restée dans `~/backup.log`, que
+personne ne consulte. Un échec silencieux n'est pas une sauvegarde ratée : c'est une
+sauvegarde qu'on **croit** avoir.
+
+`ops/mini-alerte.sh` (cron, toutes les 10 min) contrôle six choses et ne parle que sur
+changement d'état :
+
+    sauvegarde        ~/backup_status.json ok, bronze < 2 h, dump complet < 36 h
+    collecte          data/deribit/health.json : dernière trame < 180 s
+    base              au moins une ligne chargée dans les 20 dernières minutes
+    restauration      la passe hebdomadaire a réussi, et date de moins de 8 jours
+    disque            > 10 Go libres en interne
+    disque_externe    monté, et > 50 Go libres
+
+Il tourne sur l'**hôte**, pas dans un conteneur : une des pannes à détecter est l'arrêt de
+Colima, et un veilleur hébergé dans ce qu'il surveille ne peut pas signaler sa propre mort.
+Il prévient à l'apparition, insiste toutes les 6 h tant que ça dure, et signale le
+rétablissement — sans quoi un problème permanent enverrait 144 messages par jour et plus
+personne ne les lirait.
+
+Installation :
+
+```bash
+python3 -c "import secrets; print('vse-' + secrets.token_hex(9))"     # le topic
+echo 'NTFY_TOPIC=<ce-topic>' >> ~/vol-surface-engine/.env && chmod 600 ~/vol-surface-engine/.env
+chmod +x ~/vol-surface-engine/ops/mini-alerte.sh ~/vol-surface-engine/ops/mini-verif-restauration.sh
+( crontab -l 2>/dev/null; \
+  echo "*/10 * * * * $HOME/vol-surface-engine/ops/mini-alerte.sh"; \
+  echo "0 4 * * 0 $HOME/vol-surface-engine/ops/mini-verif-restauration.sh" ) | crontab -
+```
+
+Vérification, dans cet ordre :
+
+```bash
+ops/mini-alerte.sh               # "tout va bien", et n'envoie rien
+ops/mini-alerte.sh --test        # fait vibrer le téléphone (teste le canal, pas les contrôles)
+ops/mini-verif-restauration.sh   # restaure le dernier dump pour de vrai
+cat ~/verif_restauration_status.json
+```
+
+### Restauration de contrôle
+
+`ops/mini-verif-restauration.sh` prend le dump le plus récent du disque externe, appelle
+`ops/restore-dump.sh` (qui restaure dans une base jetable et compare les comptes avec la
+production), puis écrit `~/verif_restauration_status.json` — que la veille lit. Comme la
+sauvegarde, il passe par `ssh localhost` : un processus lancé par cron n'a pas l'autorisation
+macOS de lire le disque amovible.
 
 ## Redémarrage automatique de la stack (Colima → Docker → conteneurs)
 
