@@ -28,7 +28,6 @@ export PATH="/opt/homebrew/bin:/usr/sbin:/usr/bin:/bin"
 REPO="${REPO:-$HOME/vol-surface-engine}"
 VOLUME="${VSE_BACKUP_VOLUME:-/Volumes/Element1_APFS}"
 DEST="${VSE_BACKUP_DEST:-$VOLUME/Quant DB}"
-ETAT="$HOME/.alerte_actifs"
 LOG="$HOME/alerte.log"
 RAPPEL=21600              # 6 h entre deux rappels sur un probleme qui persiste
 MIN_FREE_GB=10            # disque interne
@@ -157,33 +156,52 @@ else
 fi
 
 # ------------------------------------------------------- notification, avec etat
-ACTIF="$HOME/.alerte_actifs.tmp"
-: > "$ACTIF"
+# La logique d'etat est en Python : en bash, comparer des identifiants et des
+# horodatages dans un fichier tabule a rate un rappel lors du test (une
+# iteration sur trois n'a pas notifie). Le Python decrit ici est deterministe et
+# se teste en trois passages : apparition, silence, retablissement.
+ETAT="$HOME/.alerte_actifs.json"
+ACTIONS="$(printf '%s' "$PROBS" | python3 -c '
+import json, sys, time
+chemin, rappel = sys.argv[1], int(sys.argv[2])
+now = int(time.time())
+probs = {}
+for ligne in sys.stdin.read().splitlines():
+    if not ligne.strip():
+        continue
+    ident, _, msg = ligne.partition("	")
+    if ident:
+        probs[ident] = msg
+try:
+    etat = json.load(open(chemin))
+except Exception:
+    etat = {}
+for ident, msg in probs.items():
+    dernier = int(etat.get(ident) or 0)
+    if dernier == 0:
+        print("NOUVEAU	%s	%s" % (ident, msg))
+    elif now - dernier > rappel:
+        print("RAPPEL	%s	%s" % (ident, msg))
+for ident in list(etat):
+    if ident not in probs:
+        print("REPARE	%s	%s" % (ident, ident))
+json.dump({k: now for k in probs}, open(chemin, "w"), indent=2)
+' "$ETAT" "$RAPPEL")"
+
 NB=0
-while IFS=$'\t' read -r ID MSG; do
-  [ -z "${ID:-}" ] && continue
-  NB=$(( NB + 1 ))
-  printf '%s\t%s\n' "$ID" "$NOW" >> "$ACTIF"
-  DERNIER="$(awk -F'\t' -v id="$ID" '$1==id{print $2}' "$ETAT" 2>/dev/null | tail -1)"
-  if [ -z "${DERNIER:-}" ]; then
-    notifier "$ID" "PROBLEME" "$MSG" 4
-  elif [ $(( NOW - DERNIER )) -gt "$RAPPEL" ]; then
-    notifier "$ID" "toujours en cours" "$MSG" 3
-  fi
-done <<< "$PROBS"
+while IFS=$'	' read -r TYPE ID MSG; do
+  [ -z "${TYPE:-}" ] && continue
+  case "$TYPE" in
+    NOUVEAU) NB=$(( NB + 1 )); notifier "$ID" "PROBLEME" "$MSG" 4 ;;
+    RAPPEL)                  notifier "$ID" "toujours en cours" "$MSG" 3 ;;
+    REPARE)                  notifier "$ID" "REPARE" "$MSG est revenu a la normale." 3 ;;
+  esac
+done <<< "$ACTIONS"
 
-# retablissements : ce qui etait actif et ne l'est plus
-if [ -f "$ETAT" ]; then
-  while IFS=$'\t' read -r ID DERNIER; do
-    [ -z "${ID:-}" ] && continue
-    grep -q "^$ID	" "$ACTIF" || notifier "$ID" "REPARE" "$ID est revenu a la normale." 3
-  done < "$ETAT"
-fi
-mv "$ACTIF" "$ETAT"
-
-if [ "$NB" -eq 0 ]; then
+NACTIF="$(printf '%s' "$PROBS" | grep -c . || true)"
+if [ "${NACTIF:-0}" -eq 0 ]; then
   say "tout va bien : aucun des controles ne signale de probleme"
 else
-  say "$NB probleme(s) actif(s) — voir ~/alerte.log"
+  say "$NACTIF probleme(s) actif(s), $NB nouvelle(s) alerte(s) — voir ~/alerte.log"
 fi
 exit 0
