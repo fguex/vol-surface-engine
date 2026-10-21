@@ -1,0 +1,61 @@
+{
+  "version": "2.0.0",
+  "tasks": [
+    {
+      "label": "tunnel : demarrer",
+      "type": "shell",
+      "command": "scripts/db-tunnel.sh start",
+      "problemMatcher": []
+    },
+    {
+      "label": "tunnel : etat",
+      "type": "shell",
+      "command": "scripts/db-tunnel.sh status",
+      "problemMatcher": []
+    },
+    {
+      "label": "tunnel : arreter",
+      "type": "shell",
+      "command": "scripts/db-tunnel.sh stop",
+      "problemMatcher": []
+    },
+    {
+      "label": "donnees : tirer 2 jours",
+      "type": "shell",
+      "command": ".venv/bin/python scripts/pull_dev.py --jours 2",
+      "problemMatcher": [],
+      "group": {
+        "kind": "build",
+        "isDefault": true
+      }
+    },
+    {
+      "label": "donnees : tirer 7 jours",
+      "type": "shell",
+      "command": ".venv/bin/python scripts/pull_dev.py --jours 7",
+      "problemMatcher": []
+    },
+    {
+      "label": "donnees : instantanes seuls",
+      "type": "shell",
+      "command": ".venv/bin/python scripts/pull_dev.py --sans-marches",
+      "problemMatcher": []
+    },
+    {
+      "label": "tests",
+      "type": "shell",
+      "command": ".venv/bin/python -m pytest -q",
+      "problemMatcher": [],
+      "group": {
+        "kind": "test",
+        "isDefault": true
+      }
+    },
+    {
+      "label": "lint : ruff",
+      "type": "shell",
+      "command": ".venv/bin/python -m ruff check .",
+      "problemMatcher": []
+    }
+  ]
+}

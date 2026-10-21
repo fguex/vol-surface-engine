@@ -76,6 +76,7 @@ Testing/
 data/raw/
 data/csv/
 data/deribit*/
+data/dev/
 
 # macOS
 .DS_Store
