@@ -9,6 +9,7 @@ dependencies = [
     "polars>=1.44.2",
     "psycopg[binary]>=3.3.5",
     "pyarrow>=25.0.1",
+    "scipy>=1.18.1",
     "websockets>=17.1",
     "zstandard>=0.25.0",
 ]
@@ -21,6 +22,7 @@ packages = ["python"]
 
 [dependency-groups]
 dev = [
+    "ipykernel>=7.4.0",
     "matplotlib>=3.11.2",
     "pytest>=9.1.1",
     "ruff>=0.15.22",

@@ -22,17 +22,5 @@
     ".venv/": true,
     "build/": true,
     "docs/figures/": true
-  },
-  "sqltools.connections": [
-    {
-      "name": "mini - volsurface (via tunnel)",
-      "driver": "PostgreSQL",
-      "server": "127.0.0.1",
-      "port": 15432,
-      "database": "volsurface",
-      "username": "vse",
-      "askForPassword": true,
-      "connectionTimeout": 10
-    }
-  ]
+  }
 }
