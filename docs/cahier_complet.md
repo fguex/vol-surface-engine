@@ -533,8 +533,8 @@ Lequel de ces pieges as-tu deja rencontre, et comment l'as-tu vu ?
 
 | Manque | Conséquence | Où le corriger |
 |---|---|---|
-| forward par échéance | k est construit sur le spot → biais de skew en T | migration futures + `v_forward` |
-| futures datés en `instrument` | impossible aujourd'hui : le CHECK impose `expiry IS NULL` pour `kind <> 'option'` | migration 009 |
+| ~~forward par échéance~~ | **fait le 10/11** : `silver.future_mark` + `gold.v_forward` ; `v_surface.forward_usd` / `k_fwd` | S2 : alimenter la calibration avec `k_fwd` |
+| ~~futures datés en `instrument`~~ | **fait le 10/11** : migration 009, CHECK corrigé | — |
 | tables de calibration | supprimées en 004 ; aucun fit n'est stocké | schéma v2 (voir ci-dessous) |
 | table de snapshot/surface | chaque fit repartirait de `v_surface`, non rejouable | idem |
 | index « surface à un instant t » | `v_surface` scanne 1,4 M lignes | vue matérialisée ou pointeur |
@@ -563,9 +563,9 @@ Ce que je changerais a cette proposition, et pourquoi :
 ..............................................................................................
 ```
 
-### 4.9 Le point a verifier avant le sprint S1
+### 4.9 Le point qui a bloqué le sprint S1 (résolu le 10/11)
 
-Le CHECK `instrument_option_complete` interdit aujourd'hui de stocker un **future daté** :
+Le CHECK `instrument_option_complete` interdisait de stocker un **future daté** :
 
 ```
 kind <> 'option'  =>  expiry IS NULL AND strike IS NULL AND option_type IS NULL
@@ -575,12 +575,18 @@ Or un future BTC-27MAR26 a une échéance et pas de strike. La migration 009 dev
 contrainte en distinguant trois cas : option (expiry + strike + type), future (expiry, sans strike),
 perpetual (ni l'un ni l'autre).
 
+La contrainte de `009_futures.sql` distingue désormais trois cas :
+
 ```
-Reecris la contrainte correcte :
-CHECK (
+CHECK ((kind = 'option'    AND expiry IS NOT NULL AND strike IS NOT NULL AND option_type IN ('C','P'))
+    OR (kind = 'future'    AND expiry IS NOT NULL AND strike IS NULL     AND option_type IS NULL)
+    OR (kind = 'perpetual' AND expiry IS NULL     AND strike IS NULL     AND option_type IS NULL))
+```
+
+```
+Ce que je retiens de ce piege : un CHECK ecrit pour un cas en bloque un autre six semaines
+plus tard, et l'erreur n'apparait qu'a l'insertion.
 ..............................................................................................
-..............................................................................................
-)
 ```
 
 ### 4.10 Dix requêtes à savoir écrire de tête
@@ -708,9 +714,29 @@ Choisi : ..........   parce que : ..............................................
 | C | parité call-put par échéance | auto-cohérent avec les quotes | bruit si les deux côtés sont illiquides |
 
 ```
-Mesure : ecart entre A, B et C sur 3 echeances (en bp) :
-..............................................................................................
-Decision : ..........   date : ............
+**DECIDE le 10/11/2026 — option A : futures dates + interpolation.**
+
+Pourquoi : c'est le seul choix ou F est un prix observe d'un instrument fongible et date, et non
+une reconstruction. La parite call-put (option C) devient le CONTROLE de cette courbe, pas sa
+source : elle doit confirmer le forward a quelques bp pres, et un ecart franc signale une
+echeance mal cotee. L'interpolation des echeances sans future vit cote moteur
+(`MarketForwardCurve`, ecrit en S0) : la vue SQL expose les points, pas la courbe.
+
+Applique le 10/11/2026 : migration `009_futures`, `silver.future_mark`, `gold.v_forward`,
+collecteur abonne a 24 futures, `gold.v_surface.forward_usd` / `k_fwd`.
+
+Mesure faite le 10/11/2026 (BTC, pente ATM sur le smile, biais = pente x base) :
+
+     echeance      pente (vol/pt de k)   base (bp)   biais (pt de vol)
+     2026-12-25          -21,1              70            0,15
+     2027-03-26          -10,9             210            0,23
+     2027-09-24           -9,2             489            0,45
+
+Le biais ci-dessus est celui qu'on commettait en prenant le spot pour le forward. Il grandit avec T :
+c'est un biais de SKEW, pas de niveau.
+
+Reste a mesurer : echeances d'options sans future (options quotidiennes, majoritaires) -> forward
+interpole par `MarketForwardCurve` au moment du snapshot ; ecart F(future) vs F(parite) : a faire.
 ```
 
 ### D5 — Le trou de données du 3 au 10 novembre
@@ -725,8 +751,11 @@ Le chargeur ne regarde que les 3 dernières heures.
 | C | rejouer un échantillon (1 fichier sur 12) | reconstruit la couverture, pas le détail |
 
 ```
-Decide : ..........   parce que : ..........................................................
-Si A : ou est-ce ecrit (README, note, commentaire de migration) ? ............................
+**DECIDE le 10/11/2026 — option A : reprendre au present, trou documente.**
+
+Raison : le fit n'a pas besoin de 7 jours continus, et le bronze reste rejouable si un besoin
+d'historique apparait. Le trou est ecrit ici et dans `docs/master.md` ; le chargeur ne remonte
+que 3 h en arriere, donc il ne se rebouchera pas par accident.
 ```
 
 ### D6 — Capacité et rétention
