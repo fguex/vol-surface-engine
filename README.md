@@ -1,5 +1,14 @@
 # vol-surface-engine
 
+**Document maître : [`docs/master.md`](docs/master.md)** — structure du projet, fonctionnement
+des couches, et la chaîne mathématique complète (SSVI, Dupire, PDE) avec ses hypothèses et ses
+ruptures actuelles. Commencer par là.
+
+Cours complet (39 pages, PDF) : [`docs/cours_complet.pdf`](docs/cours_complet.pdf) — architecture
+par granularité, code C++/Python fonction par fonction, modélisation rates/dividendes/forward et
+bascule crypto, cours SSVI avec exercices et questions d'entretien. Source :
+`docs/cours_complet.md`, rendu par `scripts/build_cours_pdf.py`.
+
 C++20 volatility surface calibration engine (SSVI → Dupire → Crank-Nicolson PDE).
 
 Donnees : options inverses BTC/ETH et perpetuel, collectees depuis Deribit par
