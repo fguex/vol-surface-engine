@@ -29,6 +29,8 @@ add_library(vol_surface_engine
   src/data/DivCurve.cpp
   src/data/DateUtils.cpp
   src/data/MarketData.cpp
+  src/data/ForwardCurve.cpp
+  src/pricing/PricingKernel.cpp
     src/pde/Grid.cpp
     src/pde/Tridiag.cpp
     src/pde/PDEPricer.cpp
