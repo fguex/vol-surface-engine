@@ -10,6 +10,7 @@
 #include "data/ForwardCurve.hpp"
 #include "data/RateCurve.hpp"
 #include "model/Conventions.hpp"
+#include "model/SurfaceSnapshot.hpp"
 #include "pricing/PricingKernel.hpp"
 
 #include <Eigen/Dense>
@@ -49,6 +50,45 @@ int main() {
     using calibration::SSVIParams;
 
     const SSVIParams truth{-0.35, 0.70, 0.30, 0.045};
+
+    std::printf("0. contrat du snapshot\n");
+    {
+        using Snapshot = model::SurfaceSnapshot;
+        using Err = Snapshot::Error;
+
+        Snapshot s;
+        s.snapshot_id = "test-BTC";
+        s.underlying  = "BTC";
+        s.spot        = 100.0;
+        s.k_grid      = {-0.10, 0.0, 0.10};
+        s.T_grid      = {0.25, 1.0};
+        s.iv          = Eigen::MatrixXd::Constant(2, 3, 0.40);
+        s.forward     = {100.0, 103.0};
+        s.df          = {1.0, 1.0};
+        check(s.check() == Err::Ok, "un snapshot coherent passe");
+
+        // Chaque refus doit etre celui-la, et pas un autre : un contrat qui dit
+        // seulement « non » coute une heure de diagnostic a trois heures du matin.
+        auto attendu = [&](const Snapshot& v, Err e, const char* quoi) {
+            if (v.check() != e) {
+                std::printf("  ECHEC : %s (obtenu : %s)\n", quoi, Snapshot::describe(v.check()));
+                ++failures;
+            }
+        };
+        { auto v = s; v.snapshot_id.clear();           attendu(v, Err::NoId, "id absent"); }
+        { auto v = s; v.iv.resize(3, 3);               attendu(v, Err::IvShape, "iv mal dimensionnee"); }
+        { auto v = s; v.weight = Eigen::MatrixXd::Constant(2, 2, 1.0);
+                                                       attendu(v, Err::WeightShape, "weight mal dimensionnee"); }
+        { auto v = s; v.k_grid = {0.0, -0.10, 0.10};   attendu(v, Err::KNotIncreasing, "k desordonne"); }
+        { auto v = s; v.k_grid = {-0.10, 0.0, 0.0};    attendu(v, Err::KNotIncreasing, "k duplique"); }
+        { auto v = s; v.T_grid = {1.0, 0.25};          attendu(v, Err::TNotIncreasing, "T decroissant"); }
+        { auto v = s; v.iv(0, 0) = std::nan("");       attendu(v, Err::NotFinite, "iv NaN"); }
+        { auto v = s; v.iv(1, 2) = 0.0;                attendu(v, Err::NonPositive, "iv nulle"); }
+        { auto v = s; v.forward = {100.0};             attendu(v, Err::TermShape, "forward non aligne"); }
+        { auto v = s; v.df = {1.0, 0.0};               attendu(v, Err::NonPositive, "df nul"); }
+        { auto v = s; v.forward.clear(); v.df.clear();
+                                                       check(v.well_formed(), "structure par terme optionnelle"); }
+    }
 
     std::printf("1. conventions\n");
     {
