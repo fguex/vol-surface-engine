@@ -13,6 +13,10 @@ Cahier de travail (19 pages, PDF à remplir) : [`docs/cahier_complet.pdf`](docs/
 — décisions numérotées, structures, base de données table par table, fiches de fonctions. Source :
 `docs/cahier_complet.md`.
 
+Backlog de travail (8 pages, PDF à cocher) : [`docs/todos.pdf`](docs/todos.pdf) — 39 tâches
+identifiées, classées par chantier et par critère d'acceptation mesurable, plus un chantier
+« maîtrise du code ». Source : `docs/todos.md`.
+
 C++20 volatility surface calibration engine (SSVI → Dupire → Crank-Nicolson PDE).
 
 Donnees : options inverses BTC/ETH et perpetuel, collectees depuis Deribit par
