@@ -9,6 +9,10 @@ par granularité, code C++/Python fonction par fonction, modélisation rates/div
 bascule crypto, cours SSVI avec exercices et questions d'entretien. Source :
 `docs/cours_complet.md`, rendu par `scripts/build_cours_pdf.py`.
 
+Cahier de travail (19 pages, PDF à remplir) : [`docs/cahier_complet.pdf`](docs/cahier_complet.pdf)
+— décisions numérotées, structures, base de données table par table, fiches de fonctions. Source :
+`docs/cahier_complet.md`.
+
 C++20 volatility surface calibration engine (SSVI → Dupire → Crank-Nicolson PDE).
 
 Donnees : options inverses BTC/ETH et perpetuel, collectees depuis Deribit par

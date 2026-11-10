@@ -66,4 +66,60 @@ else
   say "docker indisponible (colima pas pret)"
 fi
 
+# 3. Disque du VM Docker.
+#    Incident du 10 nov. 2026 : neuf bases `load_test_*` laissees par des tests
+#    interrompus (34 Go a elles seules) ont rempli le disque ; PostgreSQL n'a plus
+#    pu ecrire postmaster.pid et a redemarre en boucle pendant 7 jours, alors que
+#    le collecteur, lui, restait "healthy". On mesure donc le disque, on alerte tot,
+#    et on ne supprime que du cache reconstruisible.
+if "$DOCKER" info >/dev/null 2>&1; then
+  USED_PCT=$("$COLIMA" ssh -- df -P /var/lib/docker 2>/dev/null \
+             | awk 'NR==2 {gsub("%","",$5); print $5}')
+  case "${USED_PCT:-}" in
+    ''|*[!0-9]*) say "disque VM : mesure impossible" ;;
+    *)
+      if [ "$USED_PCT" -ge 85 ]; then
+        say "ALERTE disque VM a ${USED_PCT}% (seuil 85)"
+      fi
+      if [ "$USED_PCT" -ge 92 ]; then
+        say "menage : purge du cache de build (disque a ${USED_PCT}%)"
+        "$DOCKER" builder prune -af >> "$LOG" 2>&1
+      fi
+      ;;
+  esac
+fi
+
+# 4. Bases jetables oubliees.
+#    Le fixture de tests les supprime, mais un test interrompu (Ctrl-C, disque
+#    plein, kill) laisse la base derriere lui. On ne touche qu'aux bases de plus
+#    de 24 h : un test en cours a une base vieille de quelques minutes.
+if "$DOCKER" info >/dev/null 2>&1 && [ -d "$REPO" ]; then
+  cd "$REPO" || exit 0
+  OUBLIEES=$("$DOCKER" compose exec -T db psql -U "${PGUSER:-vse}" -d postgres -At -c "
+    select datname from pg_database d
+     where datname like 'load_test\_%'
+       and (pg_stat_file(format('%s/base/%s/PG_VERSION',
+                                current_setting('data_directory'), d.oid))).modification
+           < now() - interval '24 hours'" 2>/dev/null)
+  for base in $OUBLIEES; do
+    say "base de test oubliee -> $base"
+    "$DOCKER" compose exec -T db psql -U "${PGUSER:-vse}" -d postgres -q \
+      -c "drop database if exists \"$base\" with (force)" >> "$LOG" 2>&1
+  done
+fi
+
+# 5. Fraicheur des donnees : un collecteur "healthy" ne dit rien de la chaine.
+#    Le seul indicateur qui compte est l'age de la derniere marque en base.
+if "$DOCKER" info >/dev/null 2>&1 && [ -d "$REPO" ]; then
+  cd "$REPO" || exit 0
+  RETARD=$("$DOCKER" compose exec -T db psql -U "${PGUSER:-vse}" -d "${PGDATABASE:-volsurface}" -At -c "
+    select coalesce(round(extract(epoch from (now() - max(observed_at))) / 60), -1)
+      from silver.option_mark" 2>/dev/null)
+  case "${RETARD:-}" in
+    ''|*[!0-9-]*) : ;;
+    -1) say "ALERTE silver : aucune marque en base" ;;
+    *) [ "$RETARD" -gt 120 ] && say "ALERTE silver : derniere marque il y a ${RETARD} min" ;;
+  esac
+fi
+
 exit 0
