@@ -49,10 +49,19 @@ log = logging.getLogger("deribit_ws")
 # --------------------------------------------------------------------------
 # Instruments
 # --------------------------------------------------------------------------
-def list_option_instruments(currency: str) -> list[str]:
-    url = f"{REST_URL}/public/get_instruments?currency={currency}&kind=option&expired=false"
+def _list_instruments(currency: str, kind: str) -> list[str]:
+    url = f"{REST_URL}/public/get_instruments?currency={currency}&kind={kind}&expired=false"
     with urllib.request.urlopen(url, timeout=10) as r:
         return sorted(x["instrument_name"] for x in json.load(r)["result"])
+
+
+def list_option_instruments(currency: str) -> list[str]:
+    return _list_instruments(currency, "option")
+
+
+def list_future_instruments(currency: str) -> list[str]:
+    """Les futures dates : autant de points de forward que d'echeances listees."""
+    return _list_instruments(currency, "future")
 
 
 # Le parsing des noms vit dans python/collect/names.py (import en tete) : ce
@@ -286,6 +295,7 @@ class Collector:
         self.stop = asyncio.Event()
         self.chaos_at = chaos_at
         self.instruments: list[str] = []
+        self.futures: list[str] = []
         self._ws: Any = None
         self._subscribed = False
         self.stale_s = stale_s
@@ -299,6 +309,7 @@ class Collector:
     # -- lecteur -----------------------------------------------------------
     async def _session(self) -> None:
         self.instruments = [i for c in CURRENCIES for i in list_option_instruments(c)]
+        self.futures = [f for c in CURRENCIES for f in list_future_instruments(c)]
         # La bande ATM est recalculee a chaque session : le spot bouge, et les
         # echeances expirent. Une session dure des heures a des jours.
         spots: dict[str, float] = {}
@@ -309,6 +320,10 @@ class Collector:
         ticker_instr = select_ticker_subset(self.instruments, spots, self.ticker_subset)
         self.ticker_channels = len(ticker_instr)
         chans = channels_for(self.instruments, ticker_instr)
+        # Futures dates : un ticker agrege (2 s) par echeance. C'est le forward qui
+        # construira k = ln(K/F) ; le canal .100ms couterait ~2 Go/jour de plus pour
+        # une valeur dont on ne garde qu'une par tranche de 5 min.
+        chans += [f"ticker.{f}.agg2" for f in self.futures]
         # max_queue : le buffer par defaut (16 trames) deborde pendant la rafale
         # initiale (1 snapshot par canal) -> Deribit coupe avec "connection too slow".
         # open_timeout : sans lui un connect() qui traine bloque le lecteur
@@ -320,7 +335,8 @@ class Collector:
                                           close_timeout=CONNECT_CLOSE_TIMEOUT_S) as ws:
                 self._ws = ws
                 self.event("connected", n_instruments=len(self.instruments), n_channels=len(chans),
-                           n_ticker=self.ticker_channels, spots=spots)
+                           n_ticker=self.ticker_channels, n_futures=len(self.futures),
+                           spots=spots)
                 await ws.send(json.dumps({"jsonrpc": "2.0", "id": 1, "method": "public/set_heartbeat",
                                           "params": {"interval": HEARTBEAT_S}}))
                 pending = {}
@@ -442,18 +458,27 @@ class Collector:
     async def instrument_refresh(self, every_s: int = 900) -> None:
         """Echeances qui expirent (08:00 UTC) / nouvelles listees : si la liste
         change, on ferme la session -> reconnexion avec la nouvelle liste.
-        Cout : ~2 s de trou, trace dans events.jsonl."""
+        Cout : ~2 s de trou, trace dans events.jsonl.
+
+        Les futures font partie de la liste : une echeance qui apparait ou disparait
+        change la structure par terme, donc la session doit etre refaite.
+        """
         while not self.stop.is_set():
             await asyncio.sleep(every_s)
             try:
                 fresh = await asyncio.to_thread(
                     lambda: [i for c in CURRENCIES for i in list_option_instruments(c)])
+                futures = await asyncio.to_thread(
+                    lambda: [f for c in CURRENCIES for f in list_future_instruments(c)])
             except OSError as exc:
                 log.warning("instrument refresh failed: %s", exc)
                 continue
-            if set(fresh) != set(self.instruments) and self._subscribed and self._ws is not None:
-                added = sorted(set(fresh) - set(self.instruments))
-                removed = sorted(set(self.instruments) - set(fresh))
+            change = set(fresh) != set(self.instruments) or set(futures) != set(self.futures)
+            if change and self._subscribed and self._ws is not None:
+                added = sorted((set(fresh) - set(self.instruments))
+                               | (set(futures) - set(self.futures)))
+                removed = sorted((set(self.instruments) - set(fresh))
+                                 | (set(self.futures) - set(futures)))
                 self.event("instrument_refresh", added=len(added), removed=len(removed),
                            sample_added=added[:5], sample_removed=removed[:5])
                 await self._ws.close()

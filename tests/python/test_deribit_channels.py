@@ -114,3 +114,20 @@ def test_aucun_canal_inexistant() -> None:
     du perpetuel, les prints de bloc de trades.option)."""
     chans = channels_for(["BTC-24SEP27-100000-C"], ["BTC-24SEP27-100000-C"])
     assert not [c for c in chans if c.startswith(("perpetual.", "block_trades."))]
+
+
+def test_meta_future_date() -> None:
+    """Un future a une echeance et pas de strike ; il est regle en USD."""
+    from python.collect.names import instrument_meta, parse_expiry_code
+
+    assert parse_expiry_code("26MAR27") == date(2027, 3, 26)
+    meta = instrument_meta("BTC-26MAR27")
+    assert meta is not None
+    assert meta["kind"] == "future"
+    assert meta["expiry"] == date(2027, 3, 26)
+    assert meta["strike"] is None and meta["option_type"] is None
+    assert meta["is_inverse"] is False
+    assert meta["quote_currency"] == "USD"
+
+    perp = instrument_meta("BTC-PERPETUAL")
+    assert perp is not None and perp["kind"] == "perpetual"

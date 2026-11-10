@@ -56,6 +56,8 @@ COLS_PERP = ("observed_at", "instrument_sk", "index_price", "mark_price", "last_
              "best_bid_price", "best_ask_price", "current_funding", "funding_8h",
              "interest_rate", "open_interest")
 COLS_VOL = ("observed_at", "underlying", "volatility")
+COLS_FUT = ("observed_at", "instrument_sk", "mark_price", "index_price", "last_price",
+            "best_bid_price", "best_ask_price", "open_interest")
 
 
 # --------------------------------------------------------------------------
@@ -146,6 +148,7 @@ class Echantillon:
     premiers: dict = field(default_factory=dict)             # nom -> premiere observation
     marks: dict = field(default_factory=dict)                # (nom, tranche) -> row
     perps: dict = field(default_factory=dict)
+    futures: dict = field(default_factory=dict)              # forward par echeance
     dvols: dict = field(default_factory=dict)
     trames: int = 0
     ignorees: int = 0
@@ -239,6 +242,19 @@ def extraire(fichiers, bucket_s: int = BUCKET_S) -> Echantillon:
                     if meta:
                         cle = bucket_of(ts, bucket_s)
                         ech.voit(nom, meta, cle)
+                        if meta["kind"] == "future":
+                            # Le forward de l'echeance : mark_price d'un future est
+                            # deja en USD (reglement lineaire).
+                            ech.futures[(nom, cle)] = {
+                                "instrument_name": nom, "observed_at": cle,
+                                "mark_price": _f(data.get("mark_price")),
+                                "index_price": _f(data.get("index_price")),
+                                "last_price": _f(data.get("last_price")),
+                                "best_bid_price": _f(data.get("best_bid_price")),
+                                "best_ask_price": _f(data.get("best_ask_price")),
+                                "open_interest": _f(data.get("open_interest")),
+                            }
+                            continue
                         ech.fusionne_marque(nom, cle, {
                             "mark_iv": _f(data.get("mark_iv")),
                             "mark_price": _f(data.get("mark_price")),
@@ -415,6 +431,8 @@ def charger(conn, echantillon: Echantillon, aujourdhui: dt.date | None = None) -
         "vol_index": inserer(conn, "vol_index", COLS_VOL,
                              [{"observed_at": r["observed_at"], "underlying": r["underlying"],
                                "volatility": r["volatility"]} for r in echantillon.dvols.values()]),
+        "future_mark": inserer(conn, "future_mark", COLS_FUT,
+                               lignes(echantillon.futures, COLS_FUT)),
         "instruments": len(sk),
         "instruments_inconnus": sorted(inconnus)[:5],
         "fermes": fermer_expires(conn, aujourdhui or dt.datetime.now(dt.timezone.utc).date()),
@@ -492,13 +510,13 @@ def main() -> int:
     #    le travail des 75 precedents.
     # Les tranches de 5 minutes ne chevauchent jamais deux fichiers (un fichier
     # par heure), donc decouper ainsi ne coupe aucune donnee en deux.
-    total = {"option_mark": 0, "perp_tick": 0, "vol_index": 0, "fermes": 0}
+    total = {"option_mark": 0, "perp_tick": 0, "vol_index": 0, "future_mark": 0, "fermes": 0}
     instruments = 0
     for i, chemin in enumerate(fichiers, 1):
         ech = extraire([chemin], a.bucket_seconds)
-        log.info("[%d/%d] %s : %d trames, %d marques, %d ticks perpetuel, %d DVOL",
+        log.info("[%d/%d] %s : %d trames, %d marques, %d ticks perpetuel, %d futures, %d DVOL",
                  i, len(fichiers), chemin.name, ech.trames, len(ech.marks),
-                 len(ech.perps), len(ech.dvols))
+                 len(ech.perps), len(ech.futures), len(ech.dvols))
         if a.dry_run:
             for cle, row in list(ech.marks.items())[:2]:
                 log.info("    exemple %s -> %s", cle,

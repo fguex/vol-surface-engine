@@ -29,6 +29,19 @@ def parse_option_name(name: str) -> tuple[date, float, bool] | None:
         return None
 
 
+def parse_expiry_code(code: str) -> date | None:
+    """27MAR26 -> date(2026, 3, 27). None si le code n'est pas une date Deribit."""
+    if len(code) < 7:
+        return None
+    try:
+        jour = int(code[:-5])
+        mois = MONTHS[code[-5:-2]]
+        annee = int(code[-2:])
+        return date(2000 + annee, mois, jour)
+    except (KeyError, ValueError):
+        return None
+
+
 def instrument_meta(name: str, provider: str = "deribit") -> dict | None:
     """Decrit un instrument a partir de son nom, pour la dimension.
 
@@ -42,6 +55,15 @@ def instrument_meta(name: str, provider: str = "deribit") -> dict | None:
         return {"provider": provider, "underlying": devise, "instrument_name": name,
                 "kind": "perpetual", "expiry": None, "strike": None, "option_type": None,
                 "is_inverse": True, "contract_size": 1.0, "quote_currency": devise}
+    if len(parts) == 2:
+        # BTC-27MAR26 : un future date. Regle en USD (lineaire), donc is_inverse
+        # a False -- contrairement aux options du meme sous-jacent.
+        expiry = parse_expiry_code(parts[1])
+        if expiry is not None:
+            return {"provider": provider, "underlying": devise, "instrument_name": name,
+                    "kind": "future", "expiry": expiry, "strike": None, "option_type": None,
+                    "is_inverse": False, "contract_size": 1.0, "quote_currency": "USD"}
+        return None
     info = parse_option_name(name)
     if info is None:
         return None

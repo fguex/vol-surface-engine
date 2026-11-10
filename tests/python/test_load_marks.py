@@ -330,3 +330,24 @@ def test_meta_instrument() -> None:
 
 def test_parse_partage_avec_le_collecteur() -> None:
     assert parse_option_name("BTC-24SEP27-104000-P") == (dt.date(2027, 9, 24), 104000.0, False)
+
+
+def test_extraire_un_future(tmp_path: Path) -> None:
+    """Un ticker de future alimente le forward, pas la surface d'options."""
+    lignes = [trame("ticker.BTC-26MAR27.agg2", {
+        "instrument_name": "BTC-26MAR27", "timestamp": 1791871200000,
+        "mark_price": 84500.0, "index_price": 84120.0, "last_price": 84510.0,
+        "best_bid_price": 84490.0, "best_ask_price": 84510.0, "open_interest": 1234.0})]
+    chemin = tmp_path / "2026-11-10" / "120000Z.jsonl.zst"
+    chemin.parent.mkdir(parents=True)
+    ecrire_zst(chemin, lignes)
+
+    ech = extraire([chemin])
+    assert len(ech.futures) == 1, ech.futures
+    row = next(iter(ech.futures.values()))
+    assert row["mark_price"] == 84500.0
+    assert row["index_price"] == 84120.0
+    meta = ech.instruments["BTC-26MAR27"]
+    assert meta["kind"] == "future"
+    # Un future n'est pas une option : rien ne doit partir dans la surface.
+    assert not ech.marks
