@@ -67,6 +67,49 @@ sans elle), **UTILE** (améliore un chiffre), **CONFORT** (ni l'un ni l'autre).
 
 ---
 
+## 1bis. Les bloquants, dans l'ordre — à faire avant le reste
+
+Dix tâches sont marquées BLOQUANT, mais elles ne sont pas indépendantes : l'ordre est imposé.
+Le détail de chacune (pourquoi ça bloque, les maths, où changer) est dans
+**`docs/tutoriel_bloquants.pdf`**.
+
+```
+   D2  test SSVI qui passe a vide.............|  sans eux, « le test passe »
+   D3  trois tests jamais compiles............|  ne prouve rien
+                                              |
+                                              v
+   A1  snapshot base -> moteur................|  sans lui, le moteur ne voit
+   A3  schema 010 (run, slice, quote).........|  aucun marche reel : tout le
+   A4  JSON du run............................|  reste est theorique
+   A5  insertion en base......................|
+   A7  rejouabilite...........................|
+                                              |
+                                              v
+   B1  quelle convention publie Deribit.......|  sans elle, chaque prix
+   B2  le kernel retenu.......................|  calcule est decoratif
+                                              |
+                                              v
+   C2  ecart lineaire vs inverse               -> decide la coordonnee de Dupire
+```
+
+| Ordre | Tâche | Estimation | Ce qui devient possible |
+|---|---|---|---|
+| 1 | D2 | S | les critères des 9 autres deviennent vérifiables |
+| 2 | D3 | S | le solveur d'IV est protégé d'une régression |
+| 3 | A1 | M | la base entre dans le moteur |
+| 4 | A3 | S | un run peut exister |
+| 5 | A4 | S | un run est un artefact portable |
+| 6 | A5 | S | un run est relisible en SQL |
+| 7 | A7 | S | un run est reproductible |
+| 8 | B1 | M | on sait ce qu'on price vraiment |
+| 9 | B2 | S | le moteur price juste |
+| 10 | C2 | S | la PDE devient un choix mesuré |
+
+Règle : **une session = une tâche, et la tâche se termine quand son critère d'acceptation est
+mesuré**, pas quand le code compile. Les tâches UTILE et CONFORT ne commencent qu'après le 10.
+
+---
+
 ## 2. Chantier A — Raccorder le moteur à la base (S2)
 
 Objectif du chantier : **un fit rejouable, produit par la base, écrit dans la base.** Aujourd'hui le

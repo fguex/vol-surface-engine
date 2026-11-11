@@ -13,6 +13,10 @@ Cahier de travail (19 pages, PDF à remplir) : [`docs/cahier_complet.pdf`](docs/
 — décisions numérotées, structures, base de données table par table, fiches de fonctions. Source :
 `docs/cahier_complet.md`.
 
+Tutoriel des bloquants (11 pages) : [`docs/tutoriel_bloquants.pdf`](docs/tutoriel_bloquants.pdf)
+— les dix tâches qui bloquent, dans l'ordre, avec les maths et où changer. Source :
+`docs/tutoriel_bloquants.md`.
+
 Backlog de travail (8 pages, PDF à cocher) : [`docs/todos.pdf`](docs/todos.pdf) — 39 tâches
 identifiées, classées par chantier et par critère d'acceptation mesurable, plus un chantier
 « maîtrise du code ». Source : `docs/todos.md`.
